@@ -1,6 +1,6 @@
-# iTantra Rescue 🛟
+# TalkBit Rescue 🛟
 
-iTantra is an advanced, fully off-grid Android application built specifically for disaster response and emergency rescue operations. When cellular networks and internet connectivity fail, iTantra creates a decentralized Wi-Fi Aware Mesh Network, allowing rescue workers and victims to communicate seamlessly, log live triage data, and broadcast emergency SOS signals.
+TalkBit is an advanced, fully off-grid Android application built specifically for disaster response and emergency rescue operations. When cellular networks and internet connectivity fail, TalkBit creates a decentralized Wi-Fi Aware Mesh Network, allowing rescue workers and victims to communicate seamlessly, log live triage data, and broadcast emergency SOS signals.
 
 ## 🚀 Key Features
 
