@@ -42,7 +42,7 @@ TalkBit is an advanced, fully off-grid Android application built specifically fo
 
 ## ⚠️ Requirements
 
-*   **Android Version:** Android 9.0 (API 28) or higher recommended (Wi-Fi Aware support).
+*   **Android Version:** Android 8.0 (API 26) or higher required (minimum SDK for Wi-Fi Aware).
 *   **Hardware:** A physical Android device with Wi-Fi hardware capable of Wi-Fi Aware (NAN).
 
 ## 📄 License
