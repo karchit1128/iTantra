@@ -1,0 +1,368 @@
+package com.example.itantra.mesh
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.net.wifi.aware.*
+import android.util.Log
+import com.example.itantra.data.TriageEntity
+import com.example.itantra.data.TriageRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+
+data class ChannelState(val isLocked: Boolean, val lockedBy: String = "")
+
+class MeshNetworkManager(private val context: Context) {
+    companion object {
+        private const val TAG = "iTantraMesh"
+        private const val SERVICE_NAME = "iTantra-SOS-Mesh"
+        private const val WPA2_PASSPHRASE = "iTantraRescue173!"
+
+        @Volatile
+        private var INSTANCE: MeshNetworkManager? = null
+
+        fun getInstance(context: Context): MeshNetworkManager {
+            return INSTANCE ?: synchronized(this) {
+                val instance = INSTANCE ?: MeshNetworkManager(context.applicationContext).also { INSTANCE = it }
+                instance
+            }
+        }
+    }
+
+    private val wifiAwareManager: WifiAwareManager? =
+        context.getSystemService(Context.WIFI_AWARE_SERVICE) as? WifiAwareManager
+
+    private var awareSession: WifiAwareSession? = null
+    private var publishSession: PublishDiscoverySession? = null
+    private var subscribeSession: SubscribeDiscoverySession? = null
+
+    private val discoveredPeers = java.util.Collections.synchronizedSet(mutableSetOf<PeerHandle>())
+    private val _discoveredPeersState = MutableStateFlow<List<String>>(emptyList())
+    val discoveredPeersState: StateFlow<List<String>> = _discoveredPeersState
+
+    private val _incomingMessages = MutableSharedFlow<String>(extraBufferCapacity = 10)
+    val incomingMessages: SharedFlow<String> = _incomingMessages
+    
+    // Half-Duplex Channel State
+    private val _channelState = MutableStateFlow(ChannelState(false))
+    val channelState: StateFlow<ChannelState> = _channelState
+    
+    private var heartbeatIntervalMs = 5000L // 5 seconds default
+    private var heartbeatJob: Job? = null
+    
+    private val scope = CoroutineScope(Dispatchers.IO)
+    private val triageRepo = TriageRepository.getInstance(context)
+
+    @SuppressLint("MissingPermission")
+    fun startMesh() {
+        if (wifiAwareManager == null) {
+            Log.w(TAG, "Wi-Fi Aware hardware not present on this device. Mesh disabled. App continues in standalone mode.")
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(context, "Hardware not supported for Mesh Networking.", android.widget.Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        if (!wifiAwareManager.isAvailable) {
+            Log.w(TAG, "Wi-Fi Aware service not available (may be disabled). Retrying is possible.")
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(context, "Please turn ON your Wi-Fi (even if offline) to use Mesh.", android.widget.Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
+        Log.d(TAG, "Attaching to Wi-Fi Aware service...")
+        wifiAwareManager.attach(object : AttachCallback() {
+            override fun onAttached(session: WifiAwareSession) {
+                Log.d(TAG, "Successfully attached to Wi-Fi Aware!")
+                awareSession = session
+                startPublishing()
+                startSubscribing()
+            }
+            override fun onAttachFailed() {
+                Log.e(TAG, "Failed to attach to Wi-Fi Aware.")
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(context, "Mesh attach failed. Restart Wi-Fi and try again.", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }, null)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startPublishing() {
+        val config = PublishConfig.Builder().setServiceName(SERVICE_NAME).build()
+
+        awareSession?.publish(config, object : DiscoverySessionCallback() {
+            override fun onPublishStarted(session: PublishDiscoverySession) {
+                Log.d(TAG, "Publishing started! Broadcasting service: $SERVICE_NAME")
+                publishSession = session
+                startAdaptiveHeartbeat()
+            }
+            override fun onMessageReceived(peerHandle: PeerHandle, message: ByteArray) {
+                handleEncryptedMessage(peerHandle, message)
+            }
+        }, null)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startSubscribing() {
+        val config = SubscribeConfig.Builder().setServiceName(SERVICE_NAME).build()
+
+        awareSession?.subscribe(config, object : DiscoverySessionCallback() {
+            override fun onSubscribeStarted(session: SubscribeDiscoverySession) {
+                Log.d(TAG, "Subscribing started! Scanning for $SERVICE_NAME")
+                subscribeSession = session
+            }
+
+            override fun onServiceDiscovered(peerHandle: PeerHandle, serviceSpecificInfo: ByteArray, matchFilter: List<ByteArray>) {
+                Log.d(TAG, "Discovered a peer! Sending Gossip Sync request.")
+                discoveredPeers.add(peerHandle)
+                _discoveredPeersState.value = discoveredPeers.map { "Node-${it.hashCode()}" }
+                
+                // GOSSIP SYNC: Send our latest timestamp
+                scope.launch {
+                    val latestTimestamp = triageRepo.getLatestTimestamp()
+                    val syncMsg = "[SYNC_REQ] $latestTimestamp"
+                    sendRawMessage(peerHandle, CryptoEngine.encrypt(syncMsg).toByteArray())
+                }
+            }
+
+            override fun onMessageReceived(peerHandle: PeerHandle, message: ByteArray) {
+                handleEncryptedMessage(peerHandle, message)
+            }
+        }, null)
+    }
+    
+    private fun handleEncryptedMessage(peerHandle: PeerHandle, message: ByteArray) {
+        val encryptedText = String(message)
+        val plainText = CryptoEngine.decrypt(encryptedText)
+        
+        if (plainText.isEmpty()) {
+            Log.e(TAG, "Failed to decrypt message from peer.")
+            return
+        }
+        
+        Log.d(TAG, "Decrypted message: $plainText")
+        
+        // Handle Gossip Sync Protocol
+        if (plainText.startsWith("[SYNC_REQ]")) {
+            val timestamp = plainText.removePrefix("[SYNC_REQ] ").toLongOrNull() ?: 0L
+            scope.launch {
+                val missingRecords = triageRepo.getVictimsSince(timestamp)
+                if (missingRecords.isNotEmpty()) {
+                    // COMPRESSION: Pipe-delimited string instead of JSON
+                    // Format: id|priority|timestamp|lat|lng|message;
+                    val payload = missingRecords.joinToString(";") {
+                        "${it.id}|${it.priority}|${it.timestamp}|${it.latitude}|${it.longitude}|${it.message}"
+                    }
+                    val syncRes = "[SYNC_RES] $payload"
+                    sendRawMessage(peerHandle, CryptoEngine.encrypt(syncRes).toByteArray())
+                }
+            }
+        } else if (plainText.startsWith("[SYNC_RES]")) {
+            val payload = plainText.removePrefix("[SYNC_RES] ")
+            try {
+                val newEntities = mutableListOf<TriageEntity>()
+                val records = payload.split(";")
+                for (record in records) {
+                    if (record.isBlank()) continue
+                    val parts = record.split("|", limit = 6)
+                    if (parts.size == 6) {
+                        newEntities.add(TriageEntity(
+                            id = parts[0],
+                            priority = parts[1],
+                            timestamp = parts[2].toLongOrNull() ?: 0L,
+                            latitude = parts[3].toDoubleOrNull() ?: 0.0,
+                            longitude = parts[4].toDoubleOrNull() ?: 0.0,
+                            message = parts[5]
+                        ))
+                    }
+                }
+                scope.launch {
+                    triageRepo.insertVictims(newEntities)
+                    Log.d(TAG, "Gossip Sync: Imported ${newEntities.size} missing records from peer via compressed binary.")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse compressed SYNC_RES", e)
+            }
+        } else if (plainText.startsWith("[PING]")) {
+            // Heartbeat received
+            Log.d(TAG, "Received heartbeat from peer.")
+        } else if (plainText.startsWith("[LOCK:]")) {
+            val sender = plainText.removePrefix("[LOCK:]")
+            _channelState.value = ChannelState(true, sender)
+        } else if (plainText == "[UNLOCK]") {
+            _channelState.value = ChannelState(false, "")
+        } else if (plainText.startsWith("[ACK:")) {
+            val msgId = plainText.substringAfter("[ACK:").substringBefore("]")
+            scope.launch {
+                triageRepo.markAsAcked(msgId)
+            }
+        } else if (plainText.startsWith("[TTL:")) {
+            val closingBracketIndex = plainText.indexOf("]")
+            if (closingBracketIndex != -1) {
+                val ttlStr = plainText.substring(5, closingBracketIndex)
+                val ttl = ttlStr.toIntOrNull() ?: 0
+                var actualMessage = plainText.substring(closingBracketIndex + 1)
+                
+                scope.launch {
+                    var msgId = ""
+                    var actualMessageInner = actualMessage
+                    if (actualMessageInner.startsWith("[ID:")) {
+                        val idEnd = actualMessageInner.indexOf("]")
+                        if (idEnd != -1) {
+                            msgId = actualMessageInner.substring(4, idEnd)
+                            actualMessageInner = actualMessageInner.substring(idEnd + 1)
+                            
+                            if (triageRepo.victimExists(msgId)) {
+                                return@launch // Deduplicate! Stop processing and stop rebroadcasting.
+                            }
+                            
+                            // Send ACK back
+                            delay(100)
+                            broadcastMessage("[ACK:$msgId]")
+                        }
+                    }
+                    
+                    val rawMsg = actualMessageInner.removePrefix("[TTS]")
+                    val prefs = context.getSharedPreferences("itnt_settings", android.content.Context.MODE_PRIVATE)
+                    val targetLang = prefs.getString("target_language", "English") ?: "English"
+                    val translatedMsg = com.example.itantra.ml.TranslationEngine.translate(rawMsg, "Unknown", targetLang)
+                    
+                    val entity = TriageEntity(id = if(msgId.isNotEmpty()) msgId else java.util.UUID.randomUUID().toString(), message = translatedMsg, priority = "YELLOW", isSentByMe = false)
+                    triageRepo.insertVictim(entity)
+                    _incomingMessages.tryEmit(if(actualMessageInner.startsWith("[TTS]")) "[TTS]$translatedMsg" else translatedMsg)
+                    
+                    if (ttl > 0) {
+                        val newTtl = ttl - 1
+                        delay(500)
+                        broadcastMessage("[TTL:$newTtl][ID:$msgId]$actualMessageInner")
+                    }
+                    
+                    if (actualMessageInner.contains("SOS", ignoreCase = true) || actualMessageInner.contains("DEATH RATTLE", ignoreCase = true)) {
+                        com.example.itantra.hardware.FlashlightManager.strobeSos(context)
+                    }
+                }
+            }
+        } else {
+            scope.launch {
+                var msgId = ""
+                var actualMessageInner = plainText
+                if (actualMessageInner.startsWith("[ID:")) {
+                    val idEnd = actualMessageInner.indexOf("]")
+                    if (idEnd != -1) {
+                        msgId = actualMessageInner.substring(4, idEnd)
+                        actualMessageInner = actualMessageInner.substring(idEnd + 1)
+                        
+                        if (triageRepo.victimExists(msgId)) {
+                            return@launch
+                        }
+                        
+                        delay(100)
+                        broadcastMessage("[ACK:$msgId]")
+                    }
+                }
+                
+                val rawMsg = actualMessageInner.removePrefix("[TTS]")
+                val prefs = context.getSharedPreferences("itnt_settings", android.content.Context.MODE_PRIVATE)
+                val targetLang = prefs.getString("target_language", "English") ?: "English"
+                val translatedMsg = com.example.itantra.ml.TranslationEngine.translate(rawMsg, "Unknown", targetLang)
+                
+                val entity = TriageEntity(id = if(msgId.isNotEmpty()) msgId else java.util.UUID.randomUUID().toString(), message = translatedMsg, priority = "YELLOW", isSentByMe = false)
+                triageRepo.insertVictim(entity)
+                _incomingMessages.tryEmit(if(actualMessageInner.startsWith("[TTS]")) "[TTS]$translatedMsg" else translatedMsg)
+                
+                if (actualMessageInner.contains("SOS", ignoreCase = true) || actualMessageInner.contains("DEATH RATTLE", ignoreCase = true)) {
+                    com.example.itantra.hardware.FlashlightManager.strobeSos(context)
+                }
+            }
+        }
+    }
+
+    fun broadcastMessage(message: String) {
+        if (discoveredPeers.isEmpty()) {
+            Log.w(TAG, "No peers discovered yet to send message.")
+            return
+        }
+        
+        // Phase 10: Multi-Hop Store & Forward Routing (Inject TTL)
+        val finalMessage = if (message.startsWith("[TTL:")) message else "[TTL:3]$message"
+        val encryptedPayload = CryptoEngine.encrypt(finalMessage)
+        val bytes = encryptedPayload.toByteArray()
+        
+        // Take snapshot to avoid ConcurrentModificationException during iteration
+        val peerSnapshot = synchronized(discoveredPeers) { discoveredPeers.toList() }
+        peerSnapshot.forEach { peer ->
+            sendRawMessage(peer, bytes)
+        }
+    }
+    
+    fun lockChannel(myId: String) {
+        broadcastMessage("[LOCK:]$myId")
+    }
+    
+    fun unlockChannel() {
+        broadcastMessage("[UNLOCK]")
+    }
+    
+    fun setBatteryLevel(level: Int) {
+        val newInterval = if (level < 15) {
+            Log.w(TAG, "Low battery ($level%). Throttling heartbeat to 30s.")
+            30000L
+        } else {
+            5000L
+        }
+        if (newInterval != heartbeatIntervalMs) {
+            heartbeatIntervalMs = newInterval
+            if (publishSession != null) {
+                startAdaptiveHeartbeat() // Restart the loop immediately
+            }
+        }
+    }
+    
+    private fun startAdaptiveHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            while (publishSession != null) {
+                delay(heartbeatIntervalMs)
+                broadcastMessage("[PING]")
+            }
+        }
+    }
+    
+    private fun sendRawMessage(peer: PeerHandle, bytes: ByteArray) {
+        if (bytes.size > 240) {
+            Log.w(TAG, "Message is too large for Wi-Fi Aware L2 datapath (${bytes.size} bytes). Dropping to prevent crash.")
+            return
+        }
+        try {
+            subscribeSession?.sendMessage(peer, 0, bytes)
+        } catch (e: Exception) {
+            Log.v(TAG, "Not a subscribe session peer")
+        }
+        try {
+            publishSession?.sendMessage(peer, 0, bytes)
+        } catch (e: Exception) {
+            Log.v(TAG, "Not a publish session peer")
+        }
+    }
+
+    // Dummy method representing Phase 2 WPA2 requirement if we switch from L2 Messaging to L3 TCP/IP Datapaths
+    
+
+    fun stopMesh() {
+        publishSession?.close()
+        subscribeSession?.close()
+        awareSession?.close()
+        publishSession = null
+        subscribeSession = null
+        awareSession = null
+        discoveredPeers.clear()
+        Log.d(TAG, "Mesh disconnected.")
+    }
+}
