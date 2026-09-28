@@ -1,45 +1,62 @@
-﻿package com.example.itantra.ml
+package com.example.itantra.ml
 
 import android.content.Context
 import android.util.Log
 
 object AssetValidator {
     val unavailableLangs = mutableSetOf<String>()
+    var sttAvailable = true
     
-    fun preflight(context: Context, lang: String): Boolean {
+    fun preflightStt(context: Context): Boolean {
+        val sttModel = "sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02/model.int8.onnx"
+        val sttTokens = "sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02/tokens.txt"
+        val ok = hasValidAsset(context, sttModel) && hasValidAsset(context, sttTokens)
+        sttAvailable = ok
+        if (!ok) Log.e("AssetValidator", "STT assets missing/invalid.")
+        return ok
+    }
+
+    fun preflightTts(context: Context, lang: String): Boolean {
         if (lang in unavailableLangs) return false
-        val ok = checkLang(context, lang)
+        
+        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+        if (lang in sttOnlyLangs) return true
+
+        val modelDir = when (lang) {
+            "Hindi"     -> "vits-piper-hi_IN-rohan-medium"
+            "Marathi"   -> "vits-piper-mr_IN-medium"
+            "Telugu"    -> "vits-piper-te_IN-medium"
+            "Malayalam" -> "vits-piper-ml_IN-medium"
+            else        -> "vits-piper-en_US-amy-low"
+        }
+        
+        val ok = checkTtsDir(context, modelDir)
         if (!ok) {
             unavailableLangs.add(lang)
-            Log.e("AssetValidator", "Language $lang marked unavailable due to missing/empty assets.")
+            Log.e("AssetValidator", "Language $lang marked unavailable due to missing/empty TTS assets in $modelDir.")
         }
         return ok
     }
 
-    private fun checkLang(context: Context, language: String): Boolean {
-        // 1. Check STT
-        val sttModel = "sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02/model.int8.onnx"
-        val sttTokens = "sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02/tokens.txt"
-        if (!hasValidAsset(context, sttModel) || !hasValidAsset(context, sttTokens)) return false
-        
-        // 2. Check TTS (unless STT only)
-        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
-        if (language in sttOnlyLangs) return true
-
-        val (modelDir, onnxFile) = when (language) {
-            "Hindi"     -> Pair("vits-piper-hi_IN-rohan-medium", "hi_IN-rohan-medium.onnx")
-            "Marathi"   -> Pair("vits-piper-mr_IN-medium", "mr_IN-medium.onnx")
-            "Telugu"    -> Pair("vits-piper-te_IN-medium", "te_IN-medium.onnx")
-            "Malayalam" -> Pair("vits-piper-ml_IN-medium", "ml_IN-medium.onnx")
-            else        -> Pair("vits-piper-en_US-amy-low", "en_US-amy-low.onnx")
+    private fun checkTtsDir(context: Context, modelDir: String): Boolean {
+        try {
+            val files = context.assets.list(modelDir)
+            if (files.isNullOrEmpty()) return false
+            
+            // Check for .onnx file
+            val onnxFile = files.find { it.endsWith(".onnx") }
+            if (onnxFile == null || !hasValidAsset(context, "$modelDir/$onnxFile")) return false
+            
+            // Check tokens.txt
+            if (!hasValidAsset(context, "$modelDir/tokens.txt")) return false
+            
+            // Check espeak-ng-data dir
+            if (!hasValidAssetDir(context, "$modelDir/espeak-ng-data")) return false
+            
+            return true
+        } catch (e: Exception) {
+            return false
         }
-        
-        if (!hasValidAsset(context, "$modelDir/$onnxFile")) return false
-        if (!hasValidAsset(context, "$modelDir/tokens.txt")) return false
-        // espeak-ng-data is a directory, check if it has files
-        if (!hasValidAssetDir(context, "$modelDir/espeak-ng-data")) return false
-        
-        return true
     }
 
     private fun hasValidAsset(context: Context, path: String): Boolean {

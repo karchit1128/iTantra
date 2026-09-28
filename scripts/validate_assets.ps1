@@ -1,4 +1,4 @@
-﻿$assets = "app/src/main/assets"
+$assets = "app/src/main/assets"
 $dirs = Get-ChildItem -Directory $assets
 $allPass = $true
 
@@ -33,7 +33,15 @@ foreach ($dir in $dirs) {
     if ($name -match "vits-piper") {
         if (-not (Test-Path "$($dir.FullName)/*.onnx")) { $status="FAIL"; $reason+="Missing .onnx" }
         if (-not (Test-Path "$($dir.FullName)/tokens.txt")) { $status="FAIL"; $reason+="Missing tokens.txt" }
-        if (-not (Test-Path "$($dir.FullName)/espeak-ng-data")) { $status="FAIL"; $reason+="Missing espeak-ng-data" }
+        $espeakPath = "$($dir.FullName)/espeak-ng-data"
+        if (-not (Test-Path $espeakPath)) { 
+            $status="FAIL"; $reason+="Missing espeak-ng-data" 
+        } else {
+            $espeakFiles = Get-ChildItem -File -Recurse $espeakPath
+            if ($espeakFiles.Count -eq 0) {
+                $status="FAIL"; $reason+="Empty espeak-ng-data"
+            }
+        }
     }
     if ($name -match "sherpa-onnx") {
         if (-not (Test-Path "$($dir.FullName)/*.onnx")) { $status="FAIL"; $reason+="Missing .onnx" }

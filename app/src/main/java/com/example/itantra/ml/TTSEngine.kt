@@ -39,7 +39,7 @@ object TTSEngine {
                 return@withLock
             }
 
-            if (!AssetValidator.preflight(context, language)) {
+            if (!AssetValidator.preflightTts(context, language)) {
                 Log.e(TAG, "Preflight failed for $language. Skipping native init.")
                 return@withLock
             }

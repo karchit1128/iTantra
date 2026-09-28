@@ -208,6 +208,8 @@ fun JuryEvaluationScreen() {
                             
                         } catch (e: Exception) {
                             status = "CRASH: ${e.message}"
+                        } finally {
+                            TTSEngine.shutdown()
                         }
                         Log.i("SELFTEST", "Diagnostic for $lang -> $status")
                         newResults.add(Pair(lang, status))

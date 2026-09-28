@@ -15,7 +15,7 @@ object STTEngine {
 
     suspend fun init(context: Context) = withContext(Dispatchers.IO) {
         if (isInitialized) return@withContext
-        if (!AssetValidator.preflight(context, "English")) {
+        if (!AssetValidator.preflightStt(context)) {
             Log.e(TAG, "Preflight failed for STT model. Skipping native init.")
             return@withContext
         }

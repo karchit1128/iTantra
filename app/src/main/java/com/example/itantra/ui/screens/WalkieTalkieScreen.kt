@@ -62,6 +62,7 @@ fun WalkieTalkieScreen() {
     var isRecording by remember { mutableStateOf(false) }
     var selectedPriority by remember { mutableStateOf("YELLOW") }
     var meshStatus by remember { mutableStateOf("Permissions required") }
+    var showLangMismatchDialog by remember { mutableStateOf<com.example.itantra.ml.SttResult.LangMismatch?>(null) }
     
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -131,7 +132,7 @@ fun WalkieTalkieScreen() {
                             meshManager.broadcastMessage("[ID:$msgId][PRIO:$selectedPriority][TTS]Priority $selectedPriority Alert from $myDeviceId: ${transcript.text}")
                         }
                         is com.example.itantra.ml.SttResult.LangMismatch -> {
-                            android.widget.Toast.makeText(context, transcript.msg, android.widget.Toast.LENGTH_LONG).show()
+                            showLangMismatchDialog = transcript
                         }
                         is com.example.itantra.ml.SttResult.Empty -> {
                             android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
@@ -249,8 +250,23 @@ fun WalkieTalkieScreen() {
                         }
                         DropdownMenu(expanded = expandedLang, onDismissRequest = { expandedLang = false }) {
                             languages.forEach { lang ->
-                                val displayText = if (lang in fallbackLangs) "$lang (STT only)" else lang
-                                DropdownMenuItem(text = { Text(displayText) }, onClick = { prefs.edit().putString("target_language", lang).apply(); expandedLang = false })
+                                val isUnavailable = com.example.itantra.ml.AssetValidator.unavailableLangs.contains(lang)
+                                val sttOnly = lang in fallbackLangs
+                                val displayText = buildString {
+                                    append(lang)
+                                    if (isUnavailable) append(" (unavailable)")
+                                    else if (sttOnly) append(" (STT only)")
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(displayText, color = if (isUnavailable) Color.Gray else Color.Unspecified) }, 
+                                    onClick = { 
+                                        if (!isUnavailable) {
+                                            prefs.edit().putString("target_language", lang).apply()
+                                            expandedLang = false
+                                        }
+                                    },
+                                    enabled = !isUnavailable
+                                )
                             }
                         }
                     }
@@ -361,7 +377,7 @@ fun WalkieTalkieScreen() {
                                                     meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${transcript.text}")
                                                 }
                                                 is com.example.itantra.ml.SttResult.LangMismatch -> {
-                                                    android.widget.Toast.makeText(context, transcript.msg, android.widget.Toast.LENGTH_LONG).show()
+                                                    showLangMismatchDialog = transcript
                                                 }
                                                 is com.example.itantra.ml.SttResult.Empty -> {
                                                     android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
@@ -416,6 +432,28 @@ fun WalkieTalkieScreen() {
                 }
             }
         }
+    }
+    
+    showLangMismatchDialog?.let { result ->
+        AlertDialog(
+            onDismissRequest = { showLangMismatchDialog = null },
+            title = { Text("Language Mismatch") },
+            text = { Text("You selected $selectedLanguage, but the model heard words from a different language script.\n\nRaw text: ${result.rawText}\n\nWhat would you like to do?") },
+            confirmButton = {
+                TextButton(onClick = { 
+                    showLangMismatchDialog = null
+                    val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
+                    val prio = selectedPriority
+                    val msgId = java.util.UUID.randomUUID().toString()
+                    val entity = TriageEntity(id = msgId, message = result.rawText, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
+                    triageRepo.insertVictim(entity)
+                    meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${result.rawText}")
+                }) { Text("Send as-is") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLangMismatchDialog = null }) { Text("Discard") }
+            }
+        )
     }
 }
 
