@@ -442,12 +442,14 @@ fun WalkieTalkieScreen() {
             confirmButton = {
                 TextButton(onClick = { 
                     showLangMismatchDialog = null
-                    val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
-                    val prio = selectedPriority
-                    val msgId = java.util.UUID.randomUUID().toString()
-                    val entity = TriageEntity(id = msgId, message = result.rawText, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
-                    triageRepo.insertVictim(entity)
-                    meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${result.rawText}")
+                    coroutineScope.launch {
+                        val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
+                        val prio = selectedPriority
+                        val msgId = java.util.UUID.randomUUID().toString()
+                        val entity = TriageEntity(id = msgId, message = result.rawText, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
+                        triageRepo.insertVictim(entity)
+                        meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${result.rawText}")
+                    }
                 }) { Text("Send as-is") }
             },
             dismissButton = {
