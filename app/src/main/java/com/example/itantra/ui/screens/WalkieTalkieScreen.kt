@@ -379,7 +379,7 @@ fun WalkieTalkieScreen() {
                                                     if (showRawStt) lastSttDebugInfo = "PTT RAW:\n${transcript.rawText}\nGATE:\n${transcript.text}"
                                                     val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
                                                     val lower = transcript.text.lowercase()
-                                                    val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
+                                                    val prio = selectedPriority // BUG-22 Fix: Trust the user's UI selection instead of English-only keywords
                                                     val msgId = java.util.UUID.randomUUID().toString()
                                                     val entity = TriageEntity(id = msgId, message = transcript.text, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                                                     triageRepo.insertVictim(entity)
@@ -427,7 +427,7 @@ fun WalkieTalkieScreen() {
                                         val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
                                         val msgId = java.util.UUID.randomUUID().toString()
                                         val lower = msg.lowercase()
-                                        val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
+                                        val prio = selectedPriority // BUG-22 Fix: Trust the user's UI selection instead of English-only keywords
                                         val entity = TriageEntity(id = msgId, message = msg, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                                         triageRepo.insertVictim(entity)
                                         meshManager.sendWithRetry(msgId, "[LANG:$selectedLanguage][ID:$msgId][PRIO:$prio][TTS]$msg")

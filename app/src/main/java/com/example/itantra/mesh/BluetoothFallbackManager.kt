@@ -56,12 +56,13 @@ class BluetoothFallbackManager(private val context: Context, private val onMessa
     private fun listenForData(socket: BluetoothSocket) {
         scope.launch {
             try {
-                val inputStream: InputStream = socket.inputStream
-                val buffer = ByteArray(4096)
+                val dataIn = java.io.DataInputStream(socket.inputStream)
                 while (true) {
-                    val bytes = inputStream.read(buffer)
+                    val bytes = dataIn.readInt()
                     if (bytes > 0) {
-                        val encryptedMessage = String(buffer, 0, bytes)
+                        val buffer = ByteArray(bytes)
+                        dataIn.readFully(buffer)
+                        val encryptedMessage = String(buffer)
                         // Decrypt before sending upstream
                         val decrypted = CryptoEngine.decrypt(encryptedMessage)
                         if (decrypted.isNotEmpty()) {
@@ -87,8 +88,10 @@ class BluetoothFallbackManager(private val context: Context, private val onMessa
         val snapshot = synchronized(activeSockets) { activeSockets.toList() }
         snapshot.forEach { socket ->
             try {
-                val outStream: OutputStream = socket.outputStream
-                outStream.write(bytes)
+                val dataOut = java.io.DataOutputStream(socket.outputStream)
+                dataOut.writeInt(bytes.size)
+                dataOut.write(bytes)
+                dataOut.flush()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send fallback message", e)
             }

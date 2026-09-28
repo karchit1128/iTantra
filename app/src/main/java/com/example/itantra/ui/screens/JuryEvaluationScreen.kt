@@ -221,7 +221,7 @@ fun JuryEvaluationScreen() {
                         } catch (e: Exception) {
                             status = "CRASH: ${e.message}"
                         } finally {
-                            TTSEngine.shutdown()
+                            // BUG-19 Fix: No shutdown to preserve espeak state
                         }
                         Log.i("SELFTEST", "Diagnostic for $lang -> $status")
                         newResults.add(Pair(lang, status))

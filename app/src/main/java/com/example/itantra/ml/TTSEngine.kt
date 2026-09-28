@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import android.media.AudioAttributes
 import com.k2fsa.sherpa.onnx.*
@@ -198,7 +199,7 @@ object TTSEngine {
                 try {
                     val toneGen = android.media.ToneGenerator(AudioManager.STREAM_ALARM, 100)
                     toneGen.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 1500)
-                    Thread.sleep(1500)
+                    delay(1500)
                     toneGen.release()
                 } catch (e: Exception) {
                     Log.e(TAG, "Siren failed", e)
@@ -215,7 +216,7 @@ object TTSEngine {
             }
             audioTrack.play()
             val durationMs = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
-            Thread.sleep(durationMs)
+            delay(durationMs)
             audioTrack.stop()
             audioTrack.release()
         } catch (e: Throwable) {
@@ -296,7 +297,7 @@ object TTSEngine {
             audioTrack.write(shortArray, 0, shortArray.size)
             audioTrack.play()
             val durationMs2 = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
-            Thread.sleep(durationMs2)
+            delay(durationMs2)
             audioTrack.stop()
             audioTrack.release()
             

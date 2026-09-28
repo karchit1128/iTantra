@@ -42,7 +42,7 @@ class WifiDirectHelper(private val context: Context, private val onMessageReceiv
     fun connectToPeer(address: String) {
         val config = WifiP2pConfig().apply {
             deviceAddress = address
-            // Removed PBC requirement just in case it breaks Samsung A04s
+            groupOwnerIntent = 15 // BUG-17 Fix: Force determinism
         }
         manager?.connect(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {

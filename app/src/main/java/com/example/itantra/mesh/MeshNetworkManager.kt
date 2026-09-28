@@ -55,6 +55,7 @@ class MeshNetworkManager(private val context: Context) {
     private val triageRepo = TriageRepository.getInstance(context)
     
     private val chunkBuffers = java.util.concurrent.ConcurrentHashMap<String, MutableMap<Int, ByteArray>>()
+    private val chunkTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
     
     private var bluetoothFallback: BluetoothFallbackManager? = null
 
@@ -104,7 +105,15 @@ class MeshNetworkManager(private val context: Context) {
                         val idx = indexParts[0].toIntOrNull() ?: 0
                         val total = indexParts[1].toIntOrNull() ?: 1
                         
-                        val map = chunkBuffers.getOrPut(msgId) { java.util.concurrent.ConcurrentHashMap() }
+                        // BUG-14 Fix: Evict stale chunks
+                        val now = System.currentTimeMillis()
+                        val staleKeys = chunkTimestamps.filter { now - it.value > 30000 }.keys
+                        staleKeys.forEach { chunkBuffers.remove(it); chunkTimestamps.remove(it) }
+                        
+                        val map = chunkBuffers.getOrPut(msgId) { 
+                            chunkTimestamps[msgId] = now
+                            java.util.concurrent.ConcurrentHashMap() 
+                        }
                         map[idx] = payload
                         
                         if (map.size == total) {
@@ -119,6 +128,7 @@ class MeshNetworkManager(private val context: Context) {
                                 offset += chunk.size
                             }
                             chunkBuffers.remove(msgId)
+                            chunkTimestamps.remove(msgId)
                             handleEncryptedMessage(fullMessage)
                         }
                         return
@@ -280,6 +290,8 @@ class MeshNetworkManager(private val context: Context) {
 
     fun sendWithRetry(msgId: String, message: String) {
         scope.launch {
+            // BUG-12 Fix: Exit early if already acked
+            if (triageRepo.isAcked(msgId)) return@launch
             val startTime = System.currentTimeMillis()
             var retries = 0
             while (retries < 4) {

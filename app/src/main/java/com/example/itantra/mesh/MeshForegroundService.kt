@@ -1,4 +1,4 @@
-﻿package com.example.itantra.mesh
+package com.example.itantra.mesh
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -10,6 +10,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -29,6 +33,9 @@ class MeshForegroundService : Service() {
     private var meshManager: MeshNetworkManager? = null
     private var batteryMonitor: BatteryMonitorService? = null
 
+    // BUG-11 Fix: Use a scoped coroutine tied to the Service lifecycle instead of GlobalScope
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -45,11 +52,11 @@ class MeshForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        
+
         meshManager = MeshNetworkManager.getInstance(this)
         batteryMonitor = BatteryMonitorService(this, meshManager!!)
         batteryMonitor?.startMonitoring()
-        
+
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -59,37 +66,52 @@ class MeshForegroundService : Service() {
         } else {
             registerReceiver(screenReceiver, filter)
         }
-        
-        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+
+        // BUG-11 Fix: serviceScope is cancelled in onDestroy — no more GlobalScope leak
+        serviceScope.launch {
             meshManager?.incomingMessages?.collect { message ->
                 if (message.startsWith("[TTS]")) {
                     var msgLang = "English"
                     var cleanMessage = message.removePrefix("[TTS]")
+
+                    // Parse language tag: [TTS][Hindi]...
                     if (cleanMessage.startsWith("[")) {
                         val end = cleanMessage.indexOf("]")
                         if (end != -1) {
-                            msgLang = cleanMessage.substring(1, end)
-                            cleanMessage = cleanMessage.substring(end + 1)
+                            val tag = cleanMessage.substring(1, end)
+                            // Only treat as language tag if it's not a control tag
+                            if (!tag.startsWith("RED") && !tag.startsWith("ID:") && !tag.startsWith("PRIO:")) {
+                                msgLang = tag
+                                cleanMessage = cleanMessage.substring(end + 1)
+                            }
                         }
                     }
-                    
-                    // Set current language to sender's language so TTS Engine picks the right dict
+
+                    // BUG-13 Fix: Parse [RED] tag properly to determine alert state
+                    val isAlert = cleanMessage.startsWith("[RED]")
+                    if (isAlert) {
+                        cleanMessage = cleanMessage.removePrefix("[RED]")
+                    }
+
+                    // Set TTS engine language to sender's language
                     com.example.itantra.ml.TTSEngine.currentLang = msgLang
 
                     val prefs = getSharedPreferences("itnt_settings", Context.MODE_PRIVATE)
                     val isWalkieTalkieOn = prefs.getBoolean("mesh_visible", false)
-                    
-                    // FIX F4: only alert if it is Priority RED
-                    val isAlert = cleanMessage.contains("Priority RED Alert")
-                    
+
+                    // BUG-18 Fix: Play TTS if walkie-talkie is on, regardless of foreground state,
+                    // since the Service itself is always running. Only notifications go to bg.
                     if (isAlert) {
                         com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, true)
-                    } else if (isWalkieTalkieOn && com.example.itantra.MainActivity.isAppInForeground) {
+                    } else if (isWalkieTalkieOn) {
                         com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, false)
                     } else {
                         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        val cleanText = cleanMessage.replace(Regex("\\[ID:[^\\]]+\\]"), "").replace(Regex("\\[PRIO:[^\\]]+\\]"), "")
-                        
+                        val cleanText = cleanMessage
+                            .replace(Regex("\\[ID:[^\\]]+\\]"), "")
+                            .replace(Regex("\\[PRIO:[^\\]]+\\]"), "")
+                            .trim()
+
                         val notif = NotificationCompat.Builder(this@MeshForegroundService, CHANNEL_ID)
                             .setContentTitle("New Offline Message")
                             .setContentText(cleanText)
@@ -97,7 +119,7 @@ class MeshForegroundService : Service() {
                             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                             .setAutoCancel(true)
                             .build()
-                            
+
                         try {
                             notificationManager.notify((1000..9999).random(), notif)
                         } catch (e: SecurityException) {
@@ -111,6 +133,8 @@ class MeshForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // BUG-11 Fix: Cancel all coroutines when service is destroyed
+        serviceScope.cancel()
         com.example.itantra.ml.WakeWordEngine.stopListening()
         batteryMonitor?.stopMonitoring()
         unregisterReceiver(screenReceiver)
@@ -127,24 +151,24 @@ class MeshForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        
+
         com.example.itantra.ml.WakeWordEngine.startListening(this) {
             Log.d("WakeWord", "Emergency triggered hands-free! Sending SOS...")
             com.example.itantra.mesh.SOSManager.sendSOS(this, "Wake Word Emergency Trigger")
         }
-        
+
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        return null 
+        return null
     }
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("iTantra Mesh Active")
             .setContentText("Mesh is active. Tap to open iTantra.")
-            .setSmallIcon(android.R.drawable.ic_dialog_info) 
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .build()
