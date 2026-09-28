@@ -18,7 +18,7 @@ object TTSEngine {
     private const val TAG = "TTSEngine"
     private var tts: OfflineTts? = null
     var currentLang: String = ""
-        private set
+    var loadedLang: String = ""
         
     private val ttsDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
@@ -29,7 +29,10 @@ object TTSEngine {
     }
 
     private fun initLocked(context: Context, language: String = "English") {
-        if (tts != null && currentLang == language) return
+        if (tts != null && loadedLang == language) {
+            currentLang = language
+            return
+        }
         
         val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
         if (language in sttOnlyLangs) {
@@ -107,6 +110,7 @@ object TTSEngine {
             )
             tts = OfflineTts(assetManager = context.assets, config = config)
             currentLang = language
+            loadedLang = language
             Log.d(TAG, "Sherpa-ONNX TTS initialized for $language.")
         } catch (e: Throwable) {
             Log.e(TAG, "Sherpa TTS Init Failed", e)
@@ -139,10 +143,11 @@ object TTSEngine {
             return@withContext
         }
         
-        if (tts == null) {
-            if (context != null) initLocked(context, currentLang)
-            if (tts == null) return@withContext
+        if (context != null) {
+            // Always ensure the correct model is loaded for currentLang
+            initLocked(context, currentLang)
         }
+        if (tts == null) return@withContext
         
         Log.d(TAG, "Sherpa TTS generating: $text")
         try {
@@ -178,6 +183,24 @@ object TTSEngine {
                 audioManager?.let {
                     val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
                     it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+                }
+                
+                // Play Siren first
+                try {
+                    val toneGen = android.media.ToneGenerator(AudioManager.STREAM_ALARM, 100)
+                    toneGen.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 1500)
+                    Thread.sleep(1500)
+                    toneGen.release()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Siren failed", e)
+                }
+                
+                // Increase Pitch/Speed for RED Alert
+                try {
+                    val defaultRate = audioTrack.playbackRate
+                    audioTrack.playbackRate = (defaultRate * 1.3f).toInt()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Playback rate change failed", e)
                 }
             }
             audioTrack.write(shortArray, 0, shortArray.size)
@@ -241,6 +264,24 @@ object TTSEngine {
                 audioManager?.let {
                     val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
                     it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+                }
+                
+                // Play Siren first
+                try {
+                    val toneGen = android.media.ToneGenerator(AudioManager.STREAM_ALARM, 100)
+                    toneGen.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 1500)
+                    Thread.sleep(1500)
+                    toneGen.release()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Siren failed", e)
+                }
+                
+                // Increase Pitch/Speed for RED Alert
+                try {
+                    val defaultRate = audioTrack.playbackRate
+                    audioTrack.playbackRate = (defaultRate * 1.3f).toInt()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Playback rate change failed", e)
                 }
             }
             audioTrack.write(shortArray, 0, shortArray.size)

@@ -1,4 +1,4 @@
-package com.example.itantra.mesh
+﻿package com.example.itantra.mesh
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -34,11 +34,9 @@ class MeshForegroundService : Service() {
             when (intent?.action) {
                 Intent.ACTION_SCREEN_OFF -> {
                     Log.w(TAG, "Screen Off: Suspending ONNX STT Engine to save power.")
-                    // suspended
                 }
                 Intent.ACTION_SCREEN_ON -> {
                     Log.d(TAG, "Screen On: Waking up ONNX STT Engine.")
-                    // resumed
                 }
             }
         }
@@ -56,7 +54,7 @@ class MeshForegroundService : Service() {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
         }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(screenReceiver, filter)
@@ -65,23 +63,32 @@ class MeshForegroundService : Service() {
         kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             meshManager?.incomingMessages?.collect { message ->
                 if (message.startsWith("[TTS]")) {
+                    var msgLang = "English"
+                    var cleanMessage = message.removePrefix("[TTS]")
+                    if (cleanMessage.startsWith("[")) {
+                        val end = cleanMessage.indexOf("]")
+                        if (end != -1) {
+                            msgLang = cleanMessage.substring(1, end)
+                            cleanMessage = cleanMessage.substring(end + 1)
+                        }
+                    }
+                    
+                    // Set current language to sender's language so TTS Engine picks the right dict
+                    com.example.itantra.ml.TTSEngine.currentLang = msgLang
+
                     val prefs = getSharedPreferences("itnt_settings", Context.MODE_PRIVATE)
                     val isWalkieTalkieOn = prefs.getBoolean("mesh_visible", false)
-                    val isAlert = message.contains("RED") || message.contains("Priority RED") || message.contains("ALERT")
+                    
+                    // FIX F4: only alert if it is Priority RED
+                    val isAlert = cleanMessage.contains("Priority RED Alert")
                     
                     if (isAlert) {
-                        // "alert type messages will be announced at highest volume non-interruptible"
-                        // ALWAYS play Red alerts at max volume, even if Walkie Talkie mode is off!
-                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(message.removePrefix("[TTS]"), this@MeshForegroundService, true)
+                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, true)
                     } else if (isWalkieTalkieOn && com.example.itantra.MainActivity.isAppInForeground) {
-                        // "TTS should work only if the app is running on the screen and in conversations."
-                        // Normal chatter auto-plays ONLY if Walkie-Talkie mode is active AND App is in foreground
-                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(message.removePrefix("[TTS]"), this@MeshForegroundService, false)
+                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, false)
                     } else {
-                        // "if the mssge is in the green or yellow then the notification will be sent to the user if the app is closed or minimised"
-                        // Send a standard push notification
                         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        val cleanText = message.removePrefix("[TTS]").replace(Regex("\\[ID:[^\\]]+\\]"), "").replace(Regex("\\[PRIO:[^\\]]+\\]"), "")
+                        val cleanText = cleanMessage.replace(Regex("\\[ID:[^\\]]+\\]"), "").replace(Regex("\\[PRIO:[^\\]]+\\]"), "")
                         
                         val notif = NotificationCompat.Builder(this@MeshForegroundService, CHANNEL_ID)
                             .setContentTitle("New Offline Message")
@@ -120,9 +127,6 @@ class MeshForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-
-        // The service prevents the system from killing the app process
-        // while the user has the screen locked in their pocket.
         
         com.example.itantra.ml.WakeWordEngine.startListening(this) {
             Log.d("WakeWord", "Emergency triggered hands-free! Sending SOS...")
@@ -133,14 +137,13 @@ class MeshForegroundService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        return null // We don't need bound service for now, just started
+        return null 
     }
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("iTantra Mesh Active")
             .setContentText("Mesh is active. Tap to open iTantra.")
-            // Assuming there's an ic_launcher, using a built-in fallback if needed, but R.mipmap.ic_launcher should exist
             .setSmallIcon(android.R.drawable.ic_dialog_info) 
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)

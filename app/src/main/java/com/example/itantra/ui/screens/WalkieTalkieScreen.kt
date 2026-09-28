@@ -132,7 +132,7 @@ fun WalkieTalkieScreen() {
                             val msgId = java.util.UUID.randomUUID().toString()
                             val entity = TriageEntity(id = msgId, message = transcript.text, priority = selectedPriority, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                             triageRepo.insertVictim(entity)
-                            meshManager.broadcastMessage("[ID:$msgId][PRIO:$selectedPriority][TTS]Priority $selectedPriority Alert from $myDeviceId: ${transcript.text}")
+                              meshManager.sendWithRetry(msgId, "[LANG:$selectedLanguage][ID:$msgId][PRIO:$selectedPriority][TTS]${transcript.text}")
                         }
                         is com.example.itantra.ml.SttResult.LangMismatch -> {
                             showLangMismatchDialog = transcript
@@ -383,7 +383,7 @@ fun WalkieTalkieScreen() {
                                                     val msgId = java.util.UUID.randomUUID().toString()
                                                     val entity = TriageEntity(id = msgId, message = transcript.text, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                                                     triageRepo.insertVictim(entity)
-                                                    meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${transcript.text}")
+                                                    meshManager.sendWithRetry(msgId, "[LANG:$selectedLanguage][ID:$msgId][PRIO:$prio][TTS]${transcript.text}")
                                                 }
                                                 is com.example.itantra.ml.SttResult.LangMismatch -> {
                                                     showLangMismatchDialog = transcript
@@ -430,7 +430,7 @@ fun WalkieTalkieScreen() {
                                         val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
                                         val entity = TriageEntity(id = msgId, message = msg, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                                         triageRepo.insertVictim(entity)
-                                        meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: $msg")
+                                        meshManager.sendWithRetry(msgId, "[LANG:$selectedLanguage][ID:$msgId][PRIO:$prio][TTS]$msg")
                                     } catch (e: Exception) {
                                         android.util.Log.e("WalkieTalkie", "Send failed", e)
                                     }
@@ -458,7 +458,7 @@ fun WalkieTalkieScreen() {
                         val msgId = java.util.UUID.randomUUID().toString()
                         val entity = TriageEntity(id = msgId, message = result.rawText, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
                         triageRepo.insertVictim(entity)
-                        meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${result.rawText}")
+                        meshManager.sendWithRetry(msgId, "[LANG:$selectedLanguage][ID:$msgId][PRIO:$prio][TTS]${result.rawText}")
                     }
                 }) { Text("Send as-is") }
             },

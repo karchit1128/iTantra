@@ -73,6 +73,10 @@ class TriageRepository(private val context: Context) {
         triageDao.markAsAcked(msgId)
     }
 
+    suspend fun isAcked(msgId: String): Boolean {
+        return triageDao.isAcked(msgId) ?: false
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: TriageRepository? = null

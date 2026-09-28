@@ -38,6 +38,9 @@ interface TriageDao {
     @Query("UPDATE victims SET isAcked = 1 WHERE id = :msgId")
     suspend fun markAsAcked(msgId: String)
 
+    @Query("SELECT isAcked FROM victims WHERE id = :msgId")
+    suspend fun isAcked(msgId: String): Boolean?
+
     @Query("DELETE FROM victims")
     suspend fun clearAll()
 
