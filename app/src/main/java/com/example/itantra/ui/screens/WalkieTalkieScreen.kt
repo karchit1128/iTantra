@@ -63,6 +63,7 @@ fun WalkieTalkieScreen() {
     var selectedPriority by remember { mutableStateOf("YELLOW") }
     var meshStatus by remember { mutableStateOf("Permissions required") }
     var showLangMismatchDialog by remember { mutableStateOf<com.example.itantra.ml.SttResult.LangMismatch?>(null) }
+    var isHandsFreeMode by remember { mutableStateOf(false) }
     var showRawStt by remember { mutableStateOf(false) }
     var lastSttDebugInfo by remember { mutableStateOf("") }
     
@@ -120,7 +121,7 @@ fun WalkieTalkieScreen() {
         if (isHardwarePttPressed) {
             isRecording = true
             meshManager.lockChannel(myDeviceId)
-            audioEngine.startRecording(disableVad = true) { audioData ->
+            audioEngine.startRecording(disableVad = !isHandsFreeMode) { audioData ->
                 coroutineScope.launch {
                     isRecording = false
                     meshManager.unlockChannel()
@@ -369,7 +370,7 @@ fun WalkieTalkieScreen() {
                                     }
                                     isRecording = true
                                     meshManager.lockChannel(myDeviceId)
-                                    audioEngine.startRecording(disableVad = true) { audioData ->
+                                    audioEngine.startRecording(disableVad = !isHandsFreeMode) { audioData ->
                                         coroutineScope.launch {
                                             meshManager.unlockChannel()
                                             val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty()
