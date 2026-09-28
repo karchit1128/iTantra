@@ -207,7 +207,7 @@ fun JuryEvaluationScreen() {
                                     "Kannada" -> "ನಮಸ್ಕಾರ"
                                     "Malayalam" -> "നമസ്കാരം"
                                     "Bengali" -> "নমস্কার"
-                                    "Odia" -> "ନମସ଍କାର"
+                                    "Odia" -> "ନମସ୍କାର"
                                     else -> "Hello, this is a test."
                                 }
                             // Test TTS Init and Generation

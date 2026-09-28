@@ -1,4 +1,4 @@
-﻿package com.example.itantra.ml
+package com.example.itantra.ml
 
 import android.content.Context
 import android.media.AudioFormat
@@ -138,16 +138,18 @@ object TTSEngine {
 
     suspend fun synthesizeAndPlay(text: String, context: Context? = null, isAlert: Boolean = false) = withContext(ttsDispatcher) {
         val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
-        if (currentLang in sttOnlyLangs) {
-            Log.d(TAG, "Skipping TTS generation for $currentLang (Enforcing STT-only mode)")
-            return@withContext
-        }
-        
-        if (context != null) {
-            // Always ensure the correct model is loaded for currentLang
-            initLocked(context, currentLang)
+        // BUG-2 Fix: Fall back to English TTS for STT-only languages instead of silently skipping
+        val effectiveLang = if (currentLang in sttOnlyLangs) {
+            Log.d(TAG, "No TTS model for $currentLang — falling back to English voice")
+            "English"
+        } else currentLang
+
+        // BUG-5 Fix: Only re-init if tts not loaded or language changed
+        if (context != null && (tts == null || loadedLang != effectiveLang)) {
+            initLocked(context, effectiveLang)
         }
         if (tts == null) return@withContext
+
         
         Log.d(TAG, "Sherpa TTS generating: $text")
         try {
@@ -183,9 +185,16 @@ object TTSEngine {
                 audioManager?.let {
                     val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
                     it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+                    // BUG-10 Fix: Request audio focus to bypass DND/Silent mode for RED alerts
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        val focusRequest = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                            .setAudioAttributes(audioAttributes)
+                            .setAcceptsDelayedFocusGain(false)
+                            .build()
+                        it.requestAudioFocus(focusRequest)
+                    }
                 }
-                
-                // Play Siren first
+                // Play siren BEFORE speech
                 try {
                     val toneGen = android.media.ToneGenerator(AudioManager.STREAM_ALARM, 100)
                     toneGen.startTone(android.media.ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 1500)
@@ -194,16 +203,16 @@ object TTSEngine {
                 } catch (e: Exception) {
                     Log.e(TAG, "Siren failed", e)
                 }
-                
-                // Increase Pitch/Speed for RED Alert
+            }
+            // BUG-6 Fix: Write data FIRST, set rate SECOND, play THIRD (MODE_STATIC requirement)
+            audioTrack.write(shortArray, 0, shortArray.size)
+            if (isAlert) {
                 try {
-                    val defaultRate = audioTrack.playbackRate
-                    audioTrack.playbackRate = (defaultRate * 1.3f).toInt()
+                    audioTrack.playbackRate = (audio.sampleRate * 1.3f).toInt()
                 } catch (e: Exception) {
                     Log.e(TAG, "Playback rate change failed", e)
                 }
             }
-            audioTrack.write(shortArray, 0, shortArray.size)
             audioTrack.play()
             val durationMs = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
             Thread.sleep(durationMs)

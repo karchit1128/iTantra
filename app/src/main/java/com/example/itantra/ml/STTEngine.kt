@@ -42,6 +42,11 @@ object STTEngine {
     }
 
     suspend fun transcribe(audioData: ShortArray, targetLanguage: String = "English"): SttResult = withContext(Dispatchers.Default) {
+        // BUG-8 Fix: If STT crashed (isInitialized=true but recognizer=null), reset so next call re-inits
+        if (isInitialized && recognizer == null) {
+            android.util.Log.w(TAG, "STT crash recovery: resetting isInitialized flag")
+            isInitialized = false
+        }
         if (!isInitialized || recognizer == null) return@withContext SttResult.Empty()
         
         Log.d(TAG, "Sherpa STT decoding ${audioData.size} samples for $targetLanguage...")
@@ -67,27 +72,28 @@ object STTEngine {
             
             if (rawText.isBlank()) return@withContext SttResult.Empty(rawText)
             
-            // STRICT LANGUAGE ISOLATION (Language-ID Gate) - Now keeps digits and basic punctuation
-            val allowedRegex = when (targetLanguage) {
-                "Hindi", "Marathi" -> Regex("[^\\u0900-\\u097F\\s0-9.,!?']")
-                "Gujarati" -> Regex("[^\\u0A80-\\u0AFF\\s0-9.,!?']")
-                "Bengali" -> Regex("[^\\u0980-\\u09FF\\s0-9.,!?']")
-                "Tamil" -> Regex("[^\\u0B80-\\u0BFF\\s0-9.,!?']")
-                "Telugu" -> Regex("[^\\u0C00-\\u0C7F\\s0-9.,!?']")
-                "Kannada" -> Regex("[^\\u0C80-\\u0CFF\\s0-9.,!?']")
-                "Malayalam" -> Regex("[^\\u0D00-\\u0D7F\\s0-9.,!?']")
-                "Odia" -> Regex("[^\\u0B00-\\u0B7F\\s0-9.,!?']")
-                "English" -> Regex("[^a-zA-Z0-9\\s.,!?']")
-                else -> Regex("[^a-zA-Z0-9\\s.,!?']")
+            // BUG-3 Fix: LENIENT LANGUAGE GATE
+            // Dolphin outputs romanized/mixed text. Only reject if >80% of alpha chars are wrong-script.
+            val scriptRegex = when (targetLanguage) {
+                "Hindi", "Marathi" -> Regex("[\u0900-\u097F]")
+                "Gujarati" -> Regex("[\u0A80-\u0AFF]")
+                "Bengali" -> Regex("[\u0980-\u09FF]")
+                "Tamil" -> Regex("[\u0B80-\u0BFF]")
+                "Telugu" -> Regex("[\u0C00-\u0C7F]")
+                "Kannada" -> Regex("[\u0C80-\u0CFF]")
+                "Malayalam" -> Regex("[\u0D00-\u0D7F]")
+                "Odia" -> Regex("[\u0B00-\u0B7F]")
+                "English" -> Regex("[a-zA-Z]")
+                else -> Regex("[a-zA-Z]")
             }
-            val filteredText = rawText.replace(allowedRegex, "").replace(Regex("\\s+"), " ").trim()
-            
-            Log.d("STT_GATE", "Target: $targetLanguage | RAW: '$rawText' | FILTERED: '$filteredText'")
-            
-            if (filteredText.isEmpty() && rawText.isNotBlank()) {
+            val allAlpha = rawText.filter { it.isLetter() }
+            val targetScriptChars = scriptRegex.findAll(allAlpha).count()
+            val mismatchRatio = if (allAlpha.isNotEmpty()) 1.0 - (targetScriptChars.toDouble() / allAlpha.length) else 0.0
+            Log.d("STT_GATE", "Target: $targetLanguage | RAW: '$rawText' | Mismatch: $mismatchRatio")
+            if (mismatchRatio > 0.8 && allAlpha.isNotEmpty()) {
                 return@withContext SttResult.LangMismatch(rawText, "Language mismatch: resend or send as-is")
             }
-            return@withContext SttResult.Success(filteredText, rawText)
+            return@withContext SttResult.Success(rawText, rawText)
         } catch (e: Throwable) {
             Log.e(TAG, "STT Transcription failed", e)
             return@withContext SttResult.Failed(e.message ?: "Unknown error")

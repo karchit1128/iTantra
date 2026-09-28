@@ -17,8 +17,8 @@ class AudioEngine {
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         
         // VAD (Voice Activity Detection) Parameters
-        private const val SILENCE_THRESHOLD = 2000 // Amplitude below this is considered silence
-        private const val VAD_PAUSE_MS = 500L // Trigger STT after 1 second of silence
+        private const val SILENCE_THRESHOLD = 3500 // BUG-4 Fix: was 2000, too sensitive to ambient noise
+        private const val VAD_PAUSE_MS = 1200L // BUG-4 Fix: was 500ms, too short — sentence ends mid-word
         
         // Goldfish Memory Buffer (Prevents Out-Of-Memory exceptions)
         private const val MAX_SECONDS = 30 // Up to 30s per PTT message0 // Up to 30s per PTT message
