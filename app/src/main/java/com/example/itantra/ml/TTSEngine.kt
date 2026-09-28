@@ -7,14 +7,10 @@ import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import android.media.AudioAttributes
 import com.k2fsa.sherpa.onnx.*
 import java.io.File
 import java.io.FileOutputStream
-import android.speech.tts.TextToSpeech
-import java.util.Locale
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.concurrent.Executors
 
@@ -24,19 +20,12 @@ object TTSEngine {
     var currentLang: String = ""
         private set
         
-    private val mutex = Mutex()
     private val ttsDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
-    
-    // Fallback Android TTS
-    private var androidTts: TextToSpeech? = null
-    private var isAndroidTtsReady = false
 
     const val USE_SHARED_ESPEAK = true
 
     suspend fun init(context: Context, language: String = "English") = withContext(ttsDispatcher) {
-        mutex.withLock {
-            initLocked(context, language)
-        }
+        initLocked(context, language)
     }
 
     private fun initLocked(context: Context, language: String = "English") {
@@ -44,36 +33,25 @@ object TTSEngine {
         
         val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
         if (language in sttOnlyLangs) {
+            tts?.release()
+            tts = null
             currentLang = language
             Log.d(TAG, "Skipping neural TTS initialization for $language (STT-only mode)")
             return
         }
 
         if (!AssetValidator.preflightTts(context, language)) {
+            tts?.release()
+            tts = null
+            currentLang = language
             Log.e(TAG, "Preflight failed for $language. Skipping native init.")
             return
         }
 
         Log.d(TAG, "Sherpa-ONNX TTS initializing for $language...")
-        
-        if (androidTts == null) {
-            androidTts = TextToSpeech(context) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    val locale = when (language) {
-                        "Hindi" -> Locale("hi", "IN")
-                        "Marathi" -> Locale("mr", "IN")
-                        "Telugu" -> Locale("te", "IN")
-                        "Malayalam" -> Locale("ml", "IN")
-                        else -> Locale.US
-                    }
-                    val result = androidTts?.setLanguage(locale)
-                    isAndroidTtsReady = (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED)
-                }
-            }
-        }
 
         try {
-            tts?.release() // Release old model
+            tts?.release()
             tts = null
             
             val (modelDir, onnxFile) = when (language) {
@@ -92,20 +70,24 @@ object TTSEngine {
                 
                 if (!markerFile.exists()) {
                     Log.d(TAG, "Copying shared espeak-ng-data...")
-                    if (tmpEspeakDir.exists()) tmpEspeakDir.deleteRecursively()
-                    tmpEspeakDir.mkdirs()
-                    // Copy from the English base as it contains all dicts in our merged setup
-                    copyDataDir(context, "vits-piper-en_US-amy-low/espeak-ng-data", tmpEspeakDir)
-                    
-                    if (sharedEspeakDir.exists()) sharedEspeakDir.deleteRecursively()
-                    tmpEspeakDir.renameTo(sharedEspeakDir)
-                    markerFile.createNewFile()
+                    try {
+                        if (tmpEspeakDir.exists()) tmpEspeakDir.deleteRecursively()
+                        tmpEspeakDir.mkdirs()
+                        copyDataDir(context, "vits-piper-en_US-amy-low/espeak-ng-data", tmpEspeakDir)
+                        
+                        if (sharedEspeakDir.exists()) sharedEspeakDir.deleteRecursively()
+                        tmpEspeakDir.renameTo(sharedEspeakDir)
+                        markerFile.createNewFile()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Shared espeak copy failed.", e)
+                        if (tmpEspeakDir.exists()) tmpEspeakDir.deleteRecursively()
+                    }
                 }
                 
                 if (markerFile.exists() && sharedEspeakDir.exists()) {
                     activeEspeakDir = sharedEspeakDir.absolutePath
                 } else {
-                    Log.e(TAG, "Shared espeak copy failed. Falling back to asset folder.")
+                    Log.e(TAG, "Falling back to asset folder.")
                 }
             }
 
@@ -151,145 +133,138 @@ object TTSEngine {
     }
 
     suspend fun synthesizeAndPlay(text: String, context: Context? = null, isAlert: Boolean = false) = withContext(ttsDispatcher) {
-        mutex.withLock {
-            val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
-            if (currentLang in sttOnlyLangs) {
-                Log.d(TAG, "Skipping TTS generation for $currentLang (Enforcing STT-only mode)")
-                return@withLock
+        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+        if (currentLang in sttOnlyLangs) {
+            Log.d(TAG, "Skipping TTS generation for $currentLang (Enforcing STT-only mode)")
+            return@withContext
+        }
+        
+        if (tts == null) {
+            if (context != null) initLocked(context, currentLang)
+            if (tts == null) return@withContext
+        }
+        
+        Log.d(TAG, "Sherpa TTS generating: $text")
+        try {
+            val audio = tts!!.generate(text)
+            if (audio.samples.isEmpty()) return@withContext
+            val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
+            val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
+            
+            val shortArray = ShortArray(audio.samples.size) { i ->
+                (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
             }
             
-            if (tts == null) {
-                if (context != null) initLocked(context, currentLang)
-                if (tts == null) return@withLock
-            }
+            val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val audioFormat = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(audio.sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            val audioTrack = AudioTrack(
+                audioAttributes,
+                audioFormat,
+                shortArray.size * 2,
+                AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
             
-            Log.d(TAG, "Sherpa TTS generating: $text")
-            try {
-                val audio = tts!!.generate(text)
-                if (audio.samples.isEmpty()) return@withLock
-                val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
-                val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
-                
-                val shortArray = ShortArray(audio.samples.size) { i ->
-                    (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+            if (isAlert) {
+                val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.let {
+                    val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+                    it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
                 }
-                
-                val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
-                val audioAttributes = AudioAttributes.Builder()
-                    .setUsage(usage)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-                val audioFormat = AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(audio.sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-                val audioTrack = AudioTrack(
-                    audioAttributes,
-                    audioFormat,
-                    shortArray.size * 2,
-                    AudioTrack.MODE_STATIC,
-                    AudioManager.AUDIO_SESSION_ID_GENERATE
-                )
-                
-                if (isAlert) {
-                    val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                    audioManager?.let {
-                        val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-                        it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
-                    }
-                }
-                audioTrack.write(shortArray, 0, shortArray.size)
-                audioTrack.play()
-                val durationMs = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
-                Thread.sleep(durationMs)
-                audioTrack.stop()
-                audioTrack.release()
-            } catch (e: Throwable) {
-                Log.e(TAG, "TTS Generation/Playback failed", e)
             }
+            audioTrack.write(shortArray, 0, shortArray.size)
+            audioTrack.play()
+            val durationMs = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
+            Thread.sleep(durationMs)
+            audioTrack.stop()
+            audioTrack.release()
+        } catch (e: Throwable) {
+            Log.e(TAG, "TTS Generation/Playback failed", e)
         }
     }
 
     suspend fun benchmarkTTS(text: String, context: Context? = null): Pair<Long, Float> = withContext(ttsDispatcher) {
-        mutex.withLock {
-            val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
-            if (currentLang in sttOnlyLangs) return@withLock Pair(0L, 0f)
+        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+        if (currentLang in sttOnlyLangs) return@withContext Pair(0L, 0f)
 
-            val isAlert = false
-            if (tts == null) {
-                if (context != null) initLocked(context, if (currentLang.isEmpty()) "English" else currentLang)
-                if (tts == null) return@withLock Pair(0L, 0f)
+        val isAlert = false
+        if (tts == null) {
+            if (context != null) initLocked(context, if (currentLang.isEmpty()) "English" else currentLang)
+            if (tts == null) return@withContext Pair(0L, 0f)
+        }
+        Log.d(TAG, "Sherpa TTS Benchmarking: $text")
+        try {
+            val startTime = System.currentTimeMillis()
+            val audio = tts!!.generate(text)
+            val endTime = System.currentTimeMillis()
+            
+            if (audio.samples.isEmpty()) return@withContext Pair(0L, 0f)
+            
+            val inferenceTimeMs = endTime - startTime
+            val audioDurationMs = (audio.samples.size.toFloat() / audio.sampleRate.toFloat()) * 1000f
+            
+            val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
+            val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
+            
+            val shortArray = ShortArray(audio.samples.size) { i ->
+                (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
             }
-            Log.d(TAG, "Sherpa TTS Benchmarking: $text")
-            try {
-                val startTime = System.currentTimeMillis()
-                val audio = tts!!.generate(text)
-                val endTime = System.currentTimeMillis()
-                
-                if (audio.samples.isEmpty()) return@withLock Pair(0L, 0f)
-                
-                val inferenceTimeMs = endTime - startTime
-                val audioDurationMs = (audio.samples.size.toFloat() / audio.sampleRate.toFloat()) * 1000f
-                
-                val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
-                val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
-                
-                val shortArray = ShortArray(audio.samples.size) { i ->
-                    (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+            
+            val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val audioFormat = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(audio.sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            val audioTrack = AudioTrack(
+                audioAttributes,
+                audioFormat,
+                shortArray.size * 2,
+                AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
+            
+            if (isAlert) {
+                val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.let {
+                    val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+                    it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
                 }
-                
-                val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
-                val audioAttributes = AudioAttributes.Builder()
-                    .setUsage(usage)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-                val audioFormat = AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(audio.sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-                val audioTrack = AudioTrack(
-                    audioAttributes,
-                    audioFormat,
-                    shortArray.size * 2,
-                    AudioTrack.MODE_STATIC,
-                    AudioManager.AUDIO_SESSION_ID_GENERATE
-                )
-                
-                if (isAlert) {
-                    val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                    audioManager?.let {
-                        val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-                        it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
-                    }
-                }
-                audioTrack.write(shortArray, 0, shortArray.size)
-                audioTrack.play()
-                val durationMs2 = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
-                Thread.sleep(durationMs2)
-                audioTrack.stop()
-                audioTrack.release()
-                
-                return@withLock Pair(inferenceTimeMs, audioDurationMs)
-            } catch (e: Throwable) {
-                Log.e(TAG, "TTS Benchmark failed", e)
-                return@withLock Pair(0L, 0f)
             }
+            audioTrack.write(shortArray, 0, shortArray.size)
+            audioTrack.play()
+            val durationMs2 = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
+            Thread.sleep(durationMs2)
+            audioTrack.stop()
+            audioTrack.release()
+            
+            return@withContext Pair(inferenceTimeMs, audioDurationMs)
+        } catch (e: Throwable) {
+            Log.e(TAG, "TTS Benchmark failed", e)
+            return@withContext Pair(0L, 0f)
         }
     }
 
     fun stop() {
         Log.d(TAG, "Sherpa TTS stopped.")
-        androidTts?.stop()
     }
 
     suspend fun shutdown() = withContext(ttsDispatcher) {
-        mutex.withLock {
-            tts?.release()
-            tts = null
-            currentLang = ""
-            Log.d(TAG, "Sherpa TTS shutdown completely.")
-        }
+        tts?.release()
+        tts = null
+        currentLang = ""
+        Log.d(TAG, "Sherpa TTS shutdown completely.")
     }
 }

@@ -50,9 +50,13 @@ object AssetValidator {
             // Check tokens.txt
             if (!hasValidAsset(context, "$modelDir/tokens.txt")) return false
             
-            // Accept either the shared copy marker or the per-model folder
+            // A3.3c: Accept marker, OR amy-low espeak, OR per-model espeak
             val sharedMarker = java.io.File(context.filesDir, "espeak-ng-data.ok")
-            if (!sharedMarker.exists() && !hasValidAssetDir(context, "$modelDir/espeak-ng-data")) {
+            val hasMarker = sharedMarker.exists()
+            val hasBaseEspeak = hasValidAssetDir(context, "vits-piper-en_US-amy-low/espeak-ng-data")
+            val hasPerModelEspeak = hasValidAssetDir(context, "$modelDir/espeak-ng-data")
+            
+            if (!hasMarker && !hasBaseEspeak && !hasPerModelEspeak) {
                 return false
             }
             

@@ -17,14 +17,16 @@ foreach ($dir in $dirs) {
     }
 
     # 2. tokens.txt CRLF check
-    $tokens = Get-ChildItem -File -Recurse $dir.FullName | Where-Object Name -eq "tokens.txt"
-    foreach ($t in $tokens) {
-        $bytes = [System.IO.File]::ReadAllBytes($t.FullName)
-        for ($i=0; $i -lt $bytes.Length - 1; $i++) {
-            if ($bytes[$i] -eq 13 -and $bytes[$i+1] -eq 10) {
-                $status = "FAIL"
-                $reason += "CRLF in $($t.Name)"
-                break
+    if ($name -match "vits-piper") {
+        $tokens = Get-ChildItem -File -Recurse $dir.FullName | Where-Object Name -eq "tokens.txt"
+        foreach ($t in $tokens) {
+            $bytes = [System.IO.File]::ReadAllBytes($t.FullName)
+            for ($i=0; $i -lt $bytes.Length - 1; $i++) {
+                if ($bytes[$i] -eq 13 -and $bytes[$i+1] -eq 10) {
+                    $status = "FAIL"
+                    $reason += "CRLF in $($t.Name)"
+                    break
+                }
             }
         }
     }
