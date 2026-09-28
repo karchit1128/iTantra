@@ -225,7 +225,8 @@ fun MainScreen() {
                     }
                 }
             }
-            composable("walkie_talkie") { WalkieTalkieScreen() }
+            composable("walkie_talkie") { WalkieTalkieScreen(onNavigateToSettings = { navController.navigate("settings") }) }
+            composable("settings") { com.example.itantra.ui.screens.SettingsScreen() }
             composable("triage") { TriageScreen() }
             composable("radar") { DiscoveryScreen() }
             composable("map") { MapScreen() }

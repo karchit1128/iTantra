@@ -51,7 +51,7 @@ import com.example.itantra.MainActivity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalkieTalkieScreen() {
+fun WalkieTalkieScreen(onNavigateToSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val audioEngine = remember { AudioEngine() }
@@ -279,7 +279,7 @@ fun WalkieTalkieScreen() {
                             }
                         }
                     }
-                    IconButton(onClick = {}, modifier = Modifier.pointerInput(Unit) {
+                    IconButton(onClick = { onNavigateToSettings() }, modifier = Modifier.pointerInput(Unit) {
                         detectTapGestures(onLongPress = { PanicWipeManager.executeWipe(context) { meshStatus = "ALL DATA WIPED." } })
                     }) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextSecondary)
