@@ -50,8 +50,11 @@ object AssetValidator {
             // Check tokens.txt
             if (!hasValidAsset(context, "$modelDir/tokens.txt")) return false
             
-            // Check espeak-ng-data dir
-            if (!hasValidAssetDir(context, "$modelDir/espeak-ng-data")) return false
+            // Accept either the shared copy marker or the per-model folder
+            val sharedMarker = java.io.File(context.filesDir, "espeak-ng-data.ok")
+            if (!sharedMarker.exists() && !hasValidAssetDir(context, "$modelDir/espeak-ng-data")) {
+                return false
+            }
             
             return true
         } catch (e: Exception) {

@@ -198,9 +198,21 @@ fun JuryEvaluationScreen() {
                         scope.launch(Dispatchers.Main) { benchmarkStatus = "Testing $lang..." }
                         var status = ""
                         try {
+                            val testText = when(lang) {
+                                "Hindi" -> "नमस्ते"
+                                "Marathi" -> "नमस्कार"
+                                "Telugu" -> "నమస్కారం"
+                                "Malayalam" -> "നമസ്കാരം"
+                                "Tamil" -> "வணக்கம்"
+                                "Gujarati" -> "નમસ્તે"
+                                "Bengali" -> "নমস্কার"
+                                "Kannada" -> "ನಮಸ್ಕಾರ"
+                                "Odia" -> "ନମସ୍କାର"
+                                else -> "Test"
+                            }
                             // Test TTS Init and Generation
                             TTSEngine.init(context, lang)
-                            val (ttsTime, duration) = TTSEngine.benchmarkTTS("Test", context)
+                            val (ttsTime, duration) = TTSEngine.benchmarkTTS(testText, context)
                             status += if (duration > 0 || TTSEngine.currentLang in listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")) "TTS: OK" else "TTS: FAIL"
                             
                             // Since we can't reliably simulate audioData array for STT from text easily here, we'll just test STT init

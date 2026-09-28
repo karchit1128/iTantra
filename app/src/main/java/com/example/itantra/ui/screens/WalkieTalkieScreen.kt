@@ -63,6 +63,8 @@ fun WalkieTalkieScreen() {
     var selectedPriority by remember { mutableStateOf("YELLOW") }
     var meshStatus by remember { mutableStateOf("Permissions required") }
     var showLangMismatchDialog by remember { mutableStateOf<com.example.itantra.ml.SttResult.LangMismatch?>(null) }
+    var showRawStt by remember { mutableStateOf(false) }
+    var lastSttDebugInfo by remember { mutableStateOf("") }
     
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -122,9 +124,10 @@ fun WalkieTalkieScreen() {
                 coroutineScope.launch {
                     isRecording = false
                     meshManager.unlockChannel()
-                    val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty
+                    val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty()
                     when (transcript) {
                         is com.example.itantra.ml.SttResult.Success -> {
+                            if (showRawStt) lastSttDebugInfo = "VAD RAW:\n${transcript.rawText}\nGATE:\n${transcript.text}"
                             val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
                             val msgId = java.util.UUID.randomUUID().toString()
                             val entity = TriageEntity(id = msgId, message = transcript.text, priority = selectedPriority, latitude = loc.first, longitude = loc.second, isSentByMe = true)
@@ -135,6 +138,7 @@ fun WalkieTalkieScreen() {
                             showLangMismatchDialog = transcript
                         }
                         is com.example.itantra.ml.SttResult.Empty -> {
+                            if (showRawStt) lastSttDebugInfo = "VAD RAW:\n${transcript.rawText}\nGATE:\n[EMPTY]"
                             android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
                         }
                         is com.example.itantra.ml.SttResult.Failed -> {
@@ -247,6 +251,10 @@ fun WalkieTalkieScreen() {
                     Box {
                         Surface(shape = RoundedCornerShape(20.dp), color = NdrfOrange.copy(alpha = 0.12f), modifier = Modifier.padding(end = 6.dp).clickable { expandedLang = true }) {
                             Text(selectedLanguage, color = NdrfOrange, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = showRawStt, onCheckedChange = { showRawStt = it })
+                            Text("Debug STT", fontSize = 10.sp, color = TextSecondary)
                         }
                         DropdownMenu(expanded = expandedLang, onDismissRequest = { expandedLang = false }) {
                             languages.forEach { lang ->
@@ -364,10 +372,11 @@ fun WalkieTalkieScreen() {
                                     audioEngine.startRecording(disableVad = true) { audioData ->
                                         coroutineScope.launch {
                                             meshManager.unlockChannel()
-                                            val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty
+                                            val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty()
                                             isRecording = false // Set idle only after STT completes, not before
                                             when (transcript) {
                                                 is com.example.itantra.ml.SttResult.Success -> {
+                                                    if (showRawStt) lastSttDebugInfo = "PTT RAW:\n${transcript.rawText}\nGATE:\n${transcript.text}"
                                                     val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
                                                     val lower = transcript.text.lowercase()
                                                     val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
@@ -380,6 +389,7 @@ fun WalkieTalkieScreen() {
                                                     showLangMismatchDialog = transcript
                                                 }
                                                 is com.example.itantra.ml.SttResult.Empty -> {
+                                                    if (showRawStt) lastSttDebugInfo = "PTT RAW:\n${transcript.rawText}\nGATE:\n[EMPTY]"
                                                     android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
                                                 }
                                                 is com.example.itantra.ml.SttResult.Failed -> {

@@ -42,7 +42,7 @@ object STTEngine {
     }
 
     suspend fun transcribe(audioData: ShortArray, targetLanguage: String = "English"): SttResult = withContext(Dispatchers.Default) {
-        if (!isInitialized || recognizer == null) return@withContext SttResult.Empty
+        if (!isInitialized || recognizer == null) return@withContext SttResult.Empty()
         
         Log.d(TAG, "Sherpa STT decoding ${audioData.size} samples for $targetLanguage...")
         var stream: OfflineStream? = null
@@ -65,7 +65,7 @@ object STTEngine {
                 java.io.File(cacheDir, "last_stt.wav").writeBytes(pcm16ToWav(audioData, 16000))
             }
             
-            if (rawText.isBlank()) return@withContext SttResult.Empty
+            if (rawText.isBlank()) return@withContext SttResult.Empty(rawText)
             
             // STRICT LANGUAGE ISOLATION (Language-ID Gate) - Now keeps digits and basic punctuation
             val allowedRegex = when (targetLanguage) {
@@ -82,10 +82,12 @@ object STTEngine {
             }
             val filteredText = rawText.replace(allowedRegex, "").replace(Regex("\\s+"), " ").trim()
             
+            Log.d("STT_GATE", "Target: $targetLanguage | RAW: '$rawText' | FILTERED: '$filteredText'")
+            
             if (filteredText.isEmpty() && rawText.isNotBlank()) {
                 return@withContext SttResult.LangMismatch(rawText, "Language mismatch: resend or send as-is")
             }
-            return@withContext SttResult.Success(filteredText)
+            return@withContext SttResult.Success(filteredText, rawText)
         } catch (e: Throwable) {
             Log.e(TAG, "STT Transcription failed", e)
             return@withContext SttResult.Failed(e.message ?: "Unknown error")
