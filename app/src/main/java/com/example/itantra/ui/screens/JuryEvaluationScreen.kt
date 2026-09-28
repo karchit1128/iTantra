@@ -211,9 +211,9 @@ fun JuryEvaluationScreen() {
                                     else -> "Hello, this is a test."
                                 }
                             // Test TTS Init and Generation
-                            TTSEngine.init(context, lang)
+                            try { TTSEngine.init(context, lang)
                             val (ttsTime, duration) = TTSEngine.benchmarkTTS(testText, context)
-                            status += if (duration > 0 || TTSEngine.currentLang in listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")) "TTS: OK" else "TTS: FAIL"
+                            status += if (duration > 0 || TTSEngine.currentLang in listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")) "TTS: OK" else "TTS: FAIL" } catch(e: Exception) { status += "TTS: CRASH"; System.gc() }
                             
                             // Since we can't reliably simulate audioData array for STT from text easily here, we'll just test STT init
                             status += if (STTEngine.isInitialized) " | STT: INIT OK" else " | STT: FAIL"

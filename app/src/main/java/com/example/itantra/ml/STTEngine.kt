@@ -61,7 +61,7 @@ object STTEngine {
             stream.acceptWaveform(floatArray, 16000)
             recognizer!!.decode(stream)
             val result = recognizer!!.getResult(stream)
-            val rawText = result.text
+            var rawText = result.text; rawText = rawText.replace(Regex("[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]"), "").trim()
             
             // STT Diagnostics (Mentor requested)
             val peak = if (audioData.isNotEmpty()) audioData.maxOf { kotlin.math.abs(it.toInt()) } else 0

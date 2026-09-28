@@ -325,9 +325,14 @@ fun WalkieTalkieScreen(onNavigateToSettings: () -> Unit = {}) {
                 targetState = when { isPttDisabled -> "Channel Locked"; isRecording -> "Recording..."; else -> "Hold mic to speak  \u00b7  type to chat" },
                 transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "status"
             ) { statusText ->
-                Text(statusText, color = when { isPttDisabled -> TextSecondary; isRecording -> DangerRed; else -> TextSecondary },
-                    fontSize = 12.sp, fontWeight = if (isRecording) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.padding(vertical = 4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (isHandsFreeMode) "Hands-Free Active" else statusText, color = when { isPttDisabled -> TextSecondary; isRecording -> DangerRed; else -> TextSecondary },
+                        fontSize = 12.sp, fontWeight = if (isRecording) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.padding(vertical = 4.dp))
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("VAD", fontSize = 10.sp, color = TextSecondary)
+                    Switch(checked = isHandsFreeMode, onCheckedChange = { isHandsFreeMode = it }, modifier = Modifier)
+                }
             }
 
             // Input bar
