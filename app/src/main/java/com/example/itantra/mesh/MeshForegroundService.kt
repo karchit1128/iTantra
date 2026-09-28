@@ -35,6 +35,7 @@ class MeshForegroundService : Service() {
 
     // BUG-11 Fix: Use a scoped coroutine tied to the Service lifecycle instead of GlobalScope
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var currentTtsJob: kotlinx.coroutines.Job? = null
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -102,9 +103,19 @@ class MeshForegroundService : Service() {
                     // BUG-18 Fix: Play TTS if walkie-talkie is on, regardless of foreground state,
                     // since the Service itself is always running. Only notifications go to bg.
                     if (isAlert) {
-                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, true)
+                        // PREEMPTION: Cancel any ongoing TTS instantly for RED alert
+                        currentTtsJob?.cancel()
+                        currentTtsJob = serviceScope.launch {
+                            com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, true)
+                        }
                     } else if (isWalkieTalkieOn) {
-                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, false)
+                        // Normal messages queue sequentially (Wait for current to finish if it's playing)
+                        if (currentTtsJob?.isActive == true && !isAlert) {
+                            // Let it wait in the single-thread dispatcher queue
+                        }
+                        currentTtsJob = serviceScope.launch {
+                            com.example.itantra.ml.TTSEngine.synthesizeAndPlay(cleanMessage, this@MeshForegroundService, false)
+                        }
                     } else {
                         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         val cleanText = cleanMessage

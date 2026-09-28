@@ -22,6 +22,10 @@ object TTSEngine {
     var loadedLang: String = ""
         
     private val ttsDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    
+    // Alert Preemption State
+    @Volatile private var activeAudioTrack: AudioTrack? = null
+    @Volatile private var isAlertPlaying = false
 
     const val USE_SHARED_ESPEAK = true
 
@@ -138,6 +142,19 @@ object TTSEngine {
     }
 
     suspend fun synthesizeAndPlay(text: String, context: Context? = null, isAlert: Boolean = false) = withContext(ttsDispatcher) {
+        if (isAlert) {
+            // Preempt any currently playing normal message immediately
+            try {
+                activeAudioTrack?.stop()
+                activeAudioTrack?.release()
+                activeAudioTrack = null
+            } catch (e: Exception) {}
+            isAlertPlaying = true
+        } else {
+            // If an alert is currently playing, drop or queue normal messages
+            // (Queueing happens naturally via ttsDispatcher, but we shouldn't play over an alert)
+            if (isAlertPlaying) return@withContext
+        }
         val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
         // BUG-2 Fix: Fall back to English TTS for STT-only languages instead of silently skipping
         val effectiveLang = if (currentLang in sttOnlyLangs) {
@@ -180,6 +197,7 @@ object TTSEngine {
                 AudioTrack.MODE_STATIC,
                 AudioManager.AUDIO_SESSION_ID_GENERATE
             )
+            activeAudioTrack = audioTrack
             
             if (isAlert) {
                 val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -217,10 +235,18 @@ object TTSEngine {
             audioTrack.play()
             val durationMs = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L
             delay(durationMs)
-            audioTrack.stop()
-            audioTrack.release()
+            try {
+                audioTrack.stop()
+                audioTrack.release()
+            } catch(e: Exception) {}
+            
+            if (activeAudioTrack == audioTrack) {
+                activeAudioTrack = null
+                if (isAlert) isAlertPlaying = false
+            }
         } catch (e: Throwable) {
             Log.e(TAG, "TTS Generation/Playback failed", e)
+            if (isAlert) isAlertPlaying = false
         }
     }
 
@@ -268,6 +294,7 @@ object TTSEngine {
                 AudioTrack.MODE_STATIC,
                 AudioManager.AUDIO_SESSION_ID_GENERATE
             )
+            activeAudioTrack = audioTrack
             
             if (isAlert) {
                 val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
