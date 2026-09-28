@@ -16,12 +16,18 @@ import com.example.itantra.ui.theme.NdrfOrange
 @Composable
 fun SplashScreen(onTimeout: () -> Unit) {
     var loadingText by remember { mutableStateOf("Initializing ML Models...") }
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
-        delay(1000)
-        loadingText = "Quantizing INT8 Weights..."
-        delay(1000)
+        val prefs = context.getSharedPreferences("itnt_settings", android.content.Context.MODE_PRIVATE)
+        val targetLang = prefs.getString("target_language", "English") ?: "English"
+        
+        loadingText = "Loading STT Model..."
+        com.example.itantra.ml.STTEngine.init(context)
+        
+        loadingText = "Loading TTS ($targetLang)..."
+        com.example.itantra.ml.TTSEngine.init(context, targetLang)
+        
         loadingText = "Starting Wi-Fi Aware Daemon..."
-        delay(1000)
         onTimeout()
     }
     Box(modifier = Modifier.fillMaxSize().background(LightBg), contentAlignment = Alignment.Center) {

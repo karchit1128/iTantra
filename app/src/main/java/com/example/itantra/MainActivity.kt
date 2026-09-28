@@ -37,6 +37,19 @@ class MainActivity : ComponentActivity() {
     companion object {
         private val _isHardwarePttPressed = MutableStateFlow(false)
         val isHardwarePttPressed: StateFlow<Boolean> = _isHardwarePttPressed
+        
+        var isAppInForeground = false
+            private set
+    }
+    
+    override fun onStart() {
+        super.onStart()
+        isAppInForeground = true
+    }
+    
+    override fun onStop() {
+        super.onStop()
+        isAppInForeground = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

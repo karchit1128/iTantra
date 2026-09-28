@@ -7,6 +7,9 @@ import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import android.media.AudioAttributes
 import com.k2fsa.sherpa.onnx.*
 import java.io.File
 import java.io.FileOutputStream
@@ -16,16 +19,32 @@ import java.util.Locale
 object TTSEngine {
     private const val TAG = "TTSEngine"
     private var tts: OfflineTts? = null
-    private var currentLang: String = ""
+    var currentLang: String = ""
+        private set
+        
+    private val mutex = Mutex()
     
     // Fallback Android TTS
     private var androidTts: TextToSpeech? = null
     private var isAndroidTtsReady = false
 
     suspend fun init(context: Context, language: String = "English") = withContext(Dispatchers.IO) {
-        if (tts != null && currentLang == language) return@withContext
-        
-        Log.d(TAG, "Sherpa-ONNX TTS initializing for $language...")
+        mutex.withLock {
+            if (tts != null && currentLang == language) return@withLock
+            
+            val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+            if (language in sttOnlyLangs) {
+                currentLang = language
+                Log.d(TAG, "Skipping neural TTS initialization for $language (STT-only mode)")
+                return@withLock
+            }
+
+            if (!AssetValidator.preflight(context, language)) {
+                Log.e(TAG, "Preflight failed for $language. Skipping native init.")
+                return@withLock
+            }
+
+            Log.d(TAG, "Sherpa-ONNX TTS initializing for $language...")
         
         // Setup Android TTS Fallback just in case
         if (androidTts == null) {
@@ -40,16 +59,17 @@ object TTSEngine {
             tts?.release() // Release old model
             tts = null
             
-            var modelDir = "vits-piper-en_US-amy-low"
-            var onnxFile = "en_US-amy-low.onnx"
-            
-            if (language == "Hindi") {
-                modelDir = "vits-piper-hi_IN-rohan-medium"
-                onnxFile = "hi_IN-rohan-medium.onnx"
-            } else if (language != "English") {
-                // For other languages, we rely entirely on Android TTS
-                currentLang = language
-                return@withContext
+            val (modelDir, onnxFile) = when (language) {
+                "Hindi"     -> Pair("vits-piper-hi_IN-rohan-medium", "hi_IN-rohan-medium.onnx")
+                "Gujarati"  -> Pair("vits-piper-gu_IN-medium", "gu_IN-medium.onnx")
+                "Marathi"   -> Pair("vits-piper-mr_IN-medium", "mr_IN-medium.onnx")
+                "Tamil"     -> Pair("vits-piper-ta_IN-medium", "ta_IN-medium.onnx")
+                "Telugu"    -> Pair("vits-piper-te_IN-medium", "te_IN-medium.onnx")
+                "Kannada"   -> Pair("vits-piper-kn_IN-medium", "kn_IN-medium.onnx")
+                "Malayalam" -> Pair("vits-piper-ml_IN-medium", "ml_IN-medium.onnx")
+                "Bengali"   -> Pair("vits-piper-bn_IN-medium", "bn_IN-medium.onnx")
+                "Odia"      -> Pair("vits-piper-or_IN-medium", "or_IN-medium.onnx")
+                else        -> Pair("vits-piper-en_US-amy-low", "en_US-amy-low.onnx") // English default
             }
 
             val espeakDir = File(context.filesDir, "$modelDir/espeak-ng-data")
@@ -81,6 +101,7 @@ object TTSEngine {
         } catch (e: Throwable) {
             Log.e(TAG, "Sherpa TTS Init Failed", e)
         }
+        }
     }
 
     private fun copyDataDir(context: Context, srcPath: String, destDir: File) {
@@ -102,27 +123,13 @@ object TTSEngine {
         }
     }
 
-    suspend fun synthesizeAndPlay(text: String, context: Context? = null) = withContext(Dispatchers.IO) {
-        if (currentLang != "English" && currentLang != "Hindi" && isAndroidTtsReady && androidTts != null) {
-            // Fallback to Android TTS for other languages
-            Log.d(TAG, "Falling back to Android TTS for $currentLang")
-            val loc = when(currentLang) {
-                "Marathi" -> Locale("mr", "IN")
-                "Tamil" -> Locale("ta", "IN")
-                "Bengali" -> Locale("bn", "IN")
-                "Telugu" -> Locale("te", "IN")
-                "Gujarati" -> Locale("gu", "IN")
-                "Kannada" -> Locale("kn", "IN")
-                "Malayalam" -> Locale("ml", "IN")
-                "Odia" -> Locale("or", "IN")
-                "Urdu" -> Locale("ur", "IN")
-                else -> Locale.ENGLISH
-            }
-            androidTts!!.language = loc
-            androidTts!!.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+    suspend fun synthesizeAndPlay(text: String, context: Context? = null, isAlert: Boolean = false) = withContext(Dispatchers.IO) {
+        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+        if (currentLang in sttOnlyLangs) {
+            Log.d(TAG, "Skipping TTS generation for $currentLang (Enforcing STT-only mode)")
             return@withContext
         }
-
+        
         if (tts == null) {
             if (context != null) init(context, currentLang)
             if (tts == null) return@withContext
@@ -132,19 +139,39 @@ object TTSEngine {
         try {
             val audio = tts!!.generate(text)
             if (audio.samples.isEmpty()) return@withContext
+            // Mentor Fix: Soft normalize instead of hard clamping to prevent flat-topping crackle
+            val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
+            val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
             
             val shortArray = ShortArray(audio.samples.size) { i ->
-                (audio.samples[i] * 32767).toInt().toShort()
+                (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
             }
             
+            val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val audioFormat = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(audio.sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
             val audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                audio.sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
+                audioAttributes,
+                audioFormat,
                 shortArray.size * 2,
-                AudioTrack.MODE_STATIC
+                AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
             )
+            
+            if (isAlert) {
+                val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.let {
+                    val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+                    it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+                }
+            }
             audioTrack.write(shortArray, 0, shortArray.size)
             audioTrack.play()
             // Bug 4 Fix: Release AudioTrack to prevent audio resource exhaustion
@@ -159,6 +186,10 @@ object TTSEngine {
 
 
     suspend fun benchmarkTTS(text: String, context: Context? = null): Pair<Long, Float> = withContext(Dispatchers.IO) {
+        val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+        if (currentLang in sttOnlyLangs) return@withContext Pair(0L, 0f)
+
+        val isAlert = false
         if (tts == null) {
             if (context != null) init(context, if (currentLang.isEmpty()) "English" else currentLang)
             if (tts == null) return@withContext Pair(0L, 0f)
@@ -174,18 +205,39 @@ object TTSEngine {
             val inferenceTimeMs = endTime - startTime
             val audioDurationMs = (audio.samples.size.toFloat() / audio.sampleRate.toFloat()) * 1000f
             
+            // Mentor Fix: Soft normalize instead of hard clamping to prevent flat-topping crackle
+            val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
+            val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
+            
             val shortArray = ShortArray(audio.samples.size) { i ->
-                (audio.samples[i] * 32767).toInt().toShort()
+                (audio.samples[i] * scale * 32767f).toInt().coerceIn(-32768, 32767).toShort()
             }
             
+            val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val audioFormat = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(audio.sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
             val audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                audio.sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
+                audioAttributes,
+                audioFormat,
                 shortArray.size * 2,
-                AudioTrack.MODE_STATIC
+                AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
             )
+            
+            if (isAlert) {
+                val audioManager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.let {
+                    val maxVolume = it.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+                    it.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+                }
+            }
             audioTrack.write(shortArray, 0, shortArray.size)
             audioTrack.play()
             val durationMs2 = (audio.samples.size.toLong() * 1000L) / audio.sampleRate.toLong() + 300L

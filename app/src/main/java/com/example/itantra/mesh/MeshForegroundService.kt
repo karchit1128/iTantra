@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
+import kotlinx.coroutines.launch
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.itantra.R
@@ -59,6 +60,45 @@ class MeshForegroundService : Service() {
             registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(screenReceiver, filter)
+        }
+        
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            meshManager?.incomingMessages?.collect { message ->
+                if (message.startsWith("[TTS]")) {
+                    val prefs = getSharedPreferences("itnt_settings", Context.MODE_PRIVATE)
+                    val isWalkieTalkieOn = prefs.getBoolean("mesh_visible", false)
+                    val isAlert = message.contains("RED") || message.contains("Priority RED") || message.contains("ALERT")
+                    
+                    if (isAlert) {
+                        // "alert type messages will be announced at highest volume non-interruptible"
+                        // ALWAYS play Red alerts at max volume, even if Walkie Talkie mode is off!
+                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(message.removePrefix("[TTS]"), this@MeshForegroundService, true)
+                    } else if (isWalkieTalkieOn && com.example.itantra.MainActivity.isAppInForeground) {
+                        // "TTS should work only if the app is running on the screen and in conversations."
+                        // Normal chatter auto-plays ONLY if Walkie-Talkie mode is active AND App is in foreground
+                        com.example.itantra.ml.TTSEngine.synthesizeAndPlay(message.removePrefix("[TTS]"), this@MeshForegroundService, false)
+                    } else {
+                        // "if the mssge is in the green or yellow then the notification will be sent to the user if the app is closed or minimised"
+                        // Send a standard push notification
+                        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        val cleanText = message.removePrefix("[TTS]").replace(Regex("\\[ID:[^\\]]+\\]"), "").replace(Regex("\\[PRIO:[^\\]]+\\]"), "")
+                        
+                        val notif = NotificationCompat.Builder(this@MeshForegroundService, CHANNEL_ID)
+                            .setContentTitle("New Offline Message")
+                            .setContentText(cleanText)
+                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                            .setAutoCancel(true)
+                            .build()
+                            
+                        try {
+                            notificationManager.notify((1000..9999).random(), notif)
+                        } catch (e: SecurityException) {
+                            android.util.Log.e("MeshService", "Missing POST_NOTIFICATIONS permission", e)
+                        }
+                    }
+                }
+            }
         }
     }
 

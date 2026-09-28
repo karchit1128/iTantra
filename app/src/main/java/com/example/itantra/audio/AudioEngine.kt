@@ -163,12 +163,9 @@ class AudioEngine {
             
             Log.d(TAG, "Audio extracted from Goldfish buffer. Length: ${finalAudio.size} samples")
             
-            // Trigger callbacks
             val targetCallback = manualCallbackOverride ?: onCompleteCallback
             
-            if (finalAudio.isNotEmpty()) {
-                targetCallback?.invoke(finalAudio)
-            }
+            targetCallback?.invoke(finalAudio)
             
             onCompleteCallback = null // clear reference
         }

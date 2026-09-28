@@ -8,11 +8,11 @@ import android.util.Log
 object TelecomFallbackManager {
     private const val TAG = "TelecomFallbackManager"
 
-    fun initiateFallbackCall(context: Context) {
+    fun initiateFallbackCall(context: Context, peerNumber: String) {
         try {
             Log.d(TAG, "Mesh network deemed fully degraded. Falling back to GSM cellular.")
             val intent = Intent(Intent.ACTION_DIAL).apply {
-                data = Uri.parse("tel:112")
+                data = Uri.parse("tel:$peerNumber")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)

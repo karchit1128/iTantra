@@ -62,6 +62,7 @@ fun WalkieTalkieScreen() {
     var isRecording by remember { mutableStateOf(false) }
     var selectedPriority by remember { mutableStateOf("YELLOW") }
     var meshStatus by remember { mutableStateOf("Permissions required") }
+    
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val isHardwarePttPressed by MainActivity.isHardwarePttPressed.collectAsState()
@@ -105,14 +106,7 @@ fun WalkieTalkieScreen() {
 
     // Mesh runs globally, no longer stopped on dispose
 
-    LaunchedEffect(Unit) {
-        meshManager.incomingMessages.collect { message ->
-            if (message.startsWith("[TTS]")) {
-                // Pass context so TTS can re-initialize itself if needed
-                com.example.itantra.ml.TTSEngine.synthesizeAndPlay(message.removePrefix("[TTS]"), context)
-            }
-        }
-    }
+    // Background TTS auto-play is now handled reliably by MeshForegroundService
 
     LaunchedEffect(victims.size) { if (victims.isNotEmpty()) listState.animateScrollToItem(0) }
 
@@ -127,17 +121,48 @@ fun WalkieTalkieScreen() {
                 coroutineScope.launch {
                     isRecording = false
                     meshManager.unlockChannel()
-                    val transcript = com.example.itantra.ml.STTEngine.transcribe(audioData)
-                    if (transcript.isNotBlank() && !transcript.startsWith("Error:")) {
-                        val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
-                        val msgId = java.util.UUID.randomUUID().toString()
-                        val entity = TriageEntity(id = msgId, message = transcript, priority = selectedPriority, latitude = loc.first, longitude = loc.second, isSentByMe = true)
-                        triageRepo.insertVictim(entity)
-                        meshManager.broadcastMessage("[ID:$msgId][TTS]Alert from $myDeviceId: $transcript")
+                    val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty
+                    when (transcript) {
+                        is com.example.itantra.ml.SttResult.Success -> {
+                            val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
+                            val msgId = java.util.UUID.randomUUID().toString()
+                            val entity = TriageEntity(id = msgId, message = transcript.text, priority = selectedPriority, latitude = loc.first, longitude = loc.second, isSentByMe = true)
+                            triageRepo.insertVictim(entity)
+                            meshManager.broadcastMessage("[ID:$msgId][PRIO:$selectedPriority][TTS]Priority $selectedPriority Alert from $myDeviceId: ${transcript.text}")
+                        }
+                        is com.example.itantra.ml.SttResult.LangMismatch -> {
+                            android.widget.Toast.makeText(context, transcript.msg, android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        is com.example.itantra.ml.SttResult.Empty -> {
+                            android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        is com.example.itantra.ml.SttResult.Failed -> {
+                            android.widget.Toast.makeText(context, "STT Error: ${transcript.error}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
         } else if (isRecording) {
+            audioEngine.stopRecording()
+        }
+    }
+
+    var isPhoneMode by remember { mutableStateOf(false) }
+    fun startPhoneModeLoop() {}
+
+    LaunchedEffect(isPhoneMode) {
+        if (isPhoneMode) {
+            val hasPeers = meshManager.discoveredPeersState.value.isNotEmpty()
+            if (!hasPeers) {
+                // Phase 5: PTT off, no mesh peers -> Cellular call (Works like a phone)
+                val prefs = context.getSharedPreferences("itnt_settings", android.content.Context.MODE_PRIVATE)
+                val savedPeerNumber = prefs.getString("saved_peer_number", "112") ?: "112"
+                com.example.itantra.hardware.TelecomFallbackManager.initiateFallbackCall(context, savedPeerNumber)
+                isPhoneMode = false // Switch back to WalkieTalkie mode since we handed off to OS Dialer
+            } else {
+                startPhoneModeLoop()
+            }
+        } else {
             audioEngine.stopRecording()
         }
     }
@@ -149,7 +174,10 @@ fun WalkieTalkieScreen() {
         Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.CAMERA
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) requiredPermissions.add(Manifest.permission.FOREGROUND_SERVICE)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) requiredPermissions.add(Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE)
 
     var permissionsGranted by remember {
@@ -185,6 +213,12 @@ fun WalkieTalkieScreen() {
         }
     }
 
+    LaunchedEffect(Unit) {
+        if (!permissionsGranted) {
+            permissionLauncher.launch(requiredPermissions.toTypedArray())
+        }
+    }
+
     // Mic pulse animation
     val infiniteTransition = rememberInfiniteTransition(label = "ptt")
     val pttScale by infiniteTransition.animateFloat(1f, 1.18f, infiniteRepeatable(tween(500, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "scale")
@@ -206,8 +240,19 @@ fun WalkieTalkieScreen() {
                     }
                 },
                 actions = {
-                    Surface(shape = RoundedCornerShape(20.dp), color = NdrfOrange.copy(alpha = 0.12f), modifier = Modifier.padding(end = 6.dp)) {
-                        Text(selectedLanguage, color = NdrfOrange, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                    var expandedLang by remember { mutableStateOf(false) }
+                    val languages = listOf("English", "Hindi", "Bengali", "Telugu", "Marathi", "Tamil", "Gujarati", "Kannada", "Odia", "Malayalam")
+                    val fallbackLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
+                    Box {
+                        Surface(shape = RoundedCornerShape(20.dp), color = NdrfOrange.copy(alpha = 0.12f), modifier = Modifier.padding(end = 6.dp).clickable { expandedLang = true }) {
+                            Text(selectedLanguage, color = NdrfOrange, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                        }
+                        DropdownMenu(expanded = expandedLang, onDismissRequest = { expandedLang = false }) {
+                            languages.forEach { lang ->
+                                val displayText = if (lang in fallbackLangs) "$lang (STT only)" else lang
+                                DropdownMenuItem(text = { Text(displayText) }, onClick = { prefs.edit().putString("target_language", lang).apply(); expandedLang = false })
+                            }
+                        }
                     }
                     IconButton(onClick = {}, modifier = Modifier.pointerInput(Unit) {
                         detectTapGestures(onLongPress = { PanicWipeManager.executeWipe(context) { meshStatus = "ALL DATA WIPED." } })
@@ -232,7 +277,7 @@ fun WalkieTalkieScreen() {
             ) {
                 items(victims) { victim ->
                     ChatBubble(victim, onPlay = {
-                        coroutineScope.launch { com.example.itantra.ml.TTSEngine.synthesizeAndPlay(victim.message) }
+                        coroutineScope.launch { com.example.itantra.ml.TTSEngine.synthesizeAndPlay(victim.message, context, victim.priority == "RED") }
                     })
                     Spacer(Modifier.height(8.dp))
                 }
@@ -303,18 +348,27 @@ fun WalkieTalkieScreen() {
                                     audioEngine.startRecording(disableVad = true) { audioData ->
                                         coroutineScope.launch {
                                             meshManager.unlockChannel()
-                                            val transcript = com.example.itantra.ml.STTEngine.transcribe(audioData)
+                                            val transcript = if (audioData.isNotEmpty()) com.example.itantra.ml.STTEngine.transcribe(audioData, selectedLanguage) else com.example.itantra.ml.SttResult.Empty
                                             isRecording = false // Set idle only after STT completes, not before
-                                            if (!transcript.startsWith("Error:") && transcript.isNotBlank()) {
-                                                val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
-                                                val lower = transcript.lowercase()
-                                                val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
-                                                val msgId = java.util.UUID.randomUUID().toString()
-                                                val entity = TriageEntity(id = msgId, message = transcript, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
-                                                triageRepo.insertVictim(entity)
-                                                meshManager.broadcastMessage("[ID:$msgId][TTS]Alert from $myDeviceId: $transcript")
-                                            } else {
-                                                android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
+                                            when (transcript) {
+                                                is com.example.itantra.ml.SttResult.Success -> {
+                                                    val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
+                                                    val lower = transcript.text.lowercase()
+                                                    val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
+                                                    val msgId = java.util.UUID.randomUUID().toString()
+                                                    val entity = TriageEntity(id = msgId, message = transcript.text, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
+                                                    triageRepo.insertVictim(entity)
+                                                    meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: ${transcript.text}")
+                                                }
+                                                is com.example.itantra.ml.SttResult.LangMismatch -> {
+                                                    android.widget.Toast.makeText(context, transcript.msg, android.widget.Toast.LENGTH_LONG).show()
+                                                }
+                                                is com.example.itantra.ml.SttResult.Empty -> {
+                                                    android.widget.Toast.makeText(context, "Could not hear you. Speak louder.", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                                is com.example.itantra.ml.SttResult.Failed -> {
+                                                    android.widget.Toast.makeText(context, "STT Error: ${transcript.error}", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     }
@@ -342,14 +396,18 @@ fun WalkieTalkieScreen() {
                             .background(if (sendEnabled) NdrfOrange else LightBorder)
                             .clickable(enabled = sendEnabled) {
                                 val msg = textInput; textInput = ""
-                                coroutineScope.launch {
-                                    val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
-                                    val msgId = java.util.UUID.randomUUID().toString()
-                                    val lower = msg.lowercase()
-                                    val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
-                                    val entity = TriageEntity(id = msgId, message = msg, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
-                                    triageRepo.insertVictim(entity)
-                                    meshManager.broadcastMessage("[ID:$msgId][TTS]Alert from $myDeviceId: $msg")
+                                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    try {
+                                        val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
+                                        val msgId = java.util.UUID.randomUUID().toString()
+                                        val lower = msg.lowercase()
+                                        val prio = if (lower.contains("bleeding") || lower.contains("heart") || lower.contains("broken")) "RED" else selectedPriority
+                                        val entity = TriageEntity(id = msgId, message = msg, priority = prio, latitude = loc.first, longitude = loc.second, isSentByMe = true)
+                                        triageRepo.insertVictim(entity)
+                                        meshManager.broadcastMessage("[ID:$msgId][PRIO:$prio][TTS]Priority $prio Alert from $myDeviceId: $msg")
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("WalkieTalkie", "Send failed", e)
+                                    }
                                 }
                             }
                     ) {

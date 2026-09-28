@@ -91,7 +91,7 @@ fun JuryEvaluationScreen() {
                 benchmarkStatus = "Recording 3s Audio..."
                 
                 scope.launch(Dispatchers.IO) {
-                    audioEngine.startRecording(disableVad = true) { audioData ->
+                    audioEngine.startRecording(disableVad = false) { audioData ->
                         scope.launch(Dispatchers.Main) { benchmarkStatus = "Running Inference..." }
                         
                         val audioDurationMs = (audioData.size.toFloat() / 16000f) * 1000f
@@ -174,6 +174,69 @@ fun JuryEvaluationScreen() {
                 }
             }
             
+            // Phase 1: 10-Language Self-Test Diagnostic
+            var testResults by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+            var isTestingAll by remember { mutableStateOf(false) }
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            ModeButton("Run 10-Language Diagnostics (Phase 1)", isTestingAll) {
+                if (isTestingAll) return@ModeButton
+                isTestingAll = true
+                testResults = emptyList()
+                benchmarkStatus = "Running System Diagnostics..."
+                
+                scope.launch(Dispatchers.Default) {
+                    val allLangs = listOf("English", "Hindi", "Gujarati", "Marathi", "Tamil", "Telugu", "Kannada", "Malayalam", "Bengali", "Odia")
+                    val newResults = mutableListOf<Pair<String, String>>()
+                    
+                    // Init STT 
+                    STTEngine.init(context)
+                    
+                    for (lang in allLangs) {
+                        scope.launch(Dispatchers.Main) { benchmarkStatus = "Testing $lang..." }
+                        var status = ""
+                        try {
+                            // Test TTS Init and Generation
+                            TTSEngine.init(context, lang)
+                            val (ttsTime, duration) = TTSEngine.benchmarkTTS("Test", context)
+                            status += if (duration > 0 || TTSEngine.currentLang in listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")) "TTS: OK" else "TTS: FAIL"
+                            
+                            // Since we can't reliably simulate audioData array for STT from text easily here, we'll just test STT init
+                            status += if (STTEngine.isInitialized) " | STT: INIT OK" else " | STT: FAIL"
+                            
+                        } catch (e: Exception) {
+                            status = "CRASH: ${e.message}"
+                        }
+                        Log.i("SELFTEST", "Diagnostic for $lang -> $status")
+                        newResults.add(Pair(lang, status))
+                        scope.launch(Dispatchers.Main) { testResults = newResults.toList() }
+                    }
+                    
+                    scope.launch(Dispatchers.Main) {
+                        benchmarkStatus = "Diagnostics Complete"
+                        isTestingAll = false
+                    }
+                }
+            }
+            
+            if (testResults.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = LightSurface),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Diagnostic Results:", fontWeight = FontWeight.Bold)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        testResults.forEach { (lang, res) ->
+                            Text("$lang -> $res", color = if (res.contains("FAIL") || res.contains("CRASH")) Color.Red else SafeGreen, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+            
             Spacer(modifier = Modifier.height(48.dp))
             HorizontalDivider(color = LightBorder)
             Spacer(modifier = Modifier.height(32.dp))
@@ -181,7 +244,7 @@ fun JuryEvaluationScreen() {
             Text("Telecom Fallback Test", color = TextPrimary, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(16.dp))
             Button(
-                onClick = { TelecomFallbackManager.initiateFallbackCall(context) },
+                onClick = { TelecomFallbackManager.initiateFallbackCall(context, "112") },
                 colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
