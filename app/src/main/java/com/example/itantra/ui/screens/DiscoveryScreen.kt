@@ -1,5 +1,7 @@
 package com.example.itantra.ui.screens
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -33,6 +35,7 @@ fun DiscoveryScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val meshManager = remember(context) { com.example.itantra.mesh.MeshNetworkManager.getInstance(context) }
     val discoveredDevices by meshManager.discoveredPeersState.collectAsState(initial = emptyList())
+    val connectedPeersCount by meshManager.connectedPeersCount.collectAsState(initial = 0)
 
     val prefs = remember(context) { context.getSharedPreferences("itnt_settings", Context.MODE_PRIVATE) }
     var isVisible by remember { mutableStateOf(prefs.getBoolean("mesh_visible", false)) }
@@ -40,7 +43,7 @@ fun DiscoveryScreen() {
     var phoneInput by remember { mutableStateOf("") }
     var selectedLanguage by remember { mutableStateOf(prefs.getString("target_language", "English") ?: "English") }
     var expandedLanguageMenu by remember { mutableStateOf(false) }
-    val languages = listOf("English", "Hindi", "Bengali", "Telugu", "Marathi", "Tamil", "Urdu", "Gujarati", "Kannada", "Odia", "Malayalam")
+    val languages = listOf("English", "Hindi", "Bengali", "Telugu", "Marathi", "Tamil", "Gujarati", "Kannada", "Odia", "Malayalam")
 
     // Radar sweep animation
     val sweepRotation by rememberInfiniteTransition(label = "radar").animateFloat(
@@ -70,8 +73,9 @@ fun DiscoveryScreen() {
         },
         containerColor = LightBg
     ) { paddingValues ->
+        val scrollState = rememberScrollState()
         Column(
-            modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp).verticalScroll(scrollState),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Visibility Toggle Card
@@ -223,18 +227,22 @@ fun DiscoveryScreen() {
             // Discovered Nodes
             if (discoveredDevices.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                discoveredDevices.take(4).forEach { device ->
+                discoveredDevices.take(4).forEach { devicePair ->
+                    val deviceName = devicePair.first
+                    val deviceAddress = devicePair.second
+                    val isConnected = connectedPeersCount > 0
                     Surface(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            .clickable(enabled = !isConnected) { meshManager.connectToPeer(deviceAddress) },
                         shape = RoundedCornerShape(14.dp), color = LightSurface, shadowElevation = 1.dp
                     ) {
                         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(8.dp).clip(CircleShape).background(SafeGreen))
                                 Spacer(Modifier.width(10.dp))
-                                Text(device.take(20), color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                                Text(deviceName.take(20), color = TextPrimary, fontWeight = FontWeight.SemiBold)
                             }
-                            Text("Connected", color = SafeGreen, fontSize = 11.sp)
+                            Text(if (isConnected) "Connected" else "Tap to Connect", color = if (isConnected) SafeGreen else TextSecondary, fontSize = 11.sp)
                         }
                     }
                 }

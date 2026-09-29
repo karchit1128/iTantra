@@ -70,10 +70,9 @@ fun MapScreen() {
             factory = { ctx ->
                 MapView(ctx).apply {
                     mapViewRef = this
-                    setTileSource(TileSourceFactory.MAPNIK)
-                    // Ensure the map is resumed to start tile downloading and rendering threads
+                    setUseDataConnection(false) // Fully Offline
+                    setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.DEFAULT_TILE_SOURCE)
                     onResume()
-                    setUseDataConnection(true)
                     
                     setMultiTouchControls(true)
                     controller.setZoom(15.0)

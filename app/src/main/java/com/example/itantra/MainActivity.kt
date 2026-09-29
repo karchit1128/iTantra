@@ -1,6 +1,7 @@
 package com.example.itantra
 
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
@@ -37,6 +38,19 @@ class MainActivity : ComponentActivity() {
     companion object {
         private val _isHardwarePttPressed = MutableStateFlow(false)
         val isHardwarePttPressed: StateFlow<Boolean> = _isHardwarePttPressed
+        
+        var isAppInForeground = false
+            private set
+    }
+    
+    override fun onStart() {
+        super.onStart()
+        isAppInForeground = true
+    }
+    
+    override fun onStop() {
+        super.onStop()
+        isAppInForeground = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -212,7 +226,8 @@ fun MainScreen() {
                     }
                 }
             }
-            composable("walkie_talkie") { WalkieTalkieScreen() }
+            composable("walkie_talkie") { WalkieTalkieScreen(onNavigateToSettings = { navController.navigate("settings") }) }
+            composable("settings") { com.example.itantra.ui.screens.SettingsScreen() }
             composable("triage") { TriageScreen() }
             composable("radar") { DiscoveryScreen() }
             composable("map") { MapScreen() }

@@ -76,3 +76,16 @@ dependencies {
     // Mapbox/OSMDroid for Offline Cartography
     implementation("org.osmdroid:osmdroid-android:6.1.18")
 }
+
+tasks.register<Exec>("validateAssets") {
+    workingDir = rootProject.projectDir
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        commandLine("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/validate_assets.ps1")
+    } else {
+        commandLine("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/validate_assets.ps1")
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn("validateAssets")
+}

@@ -149,7 +149,7 @@ fun TriageScreen() {
                                 val entity = TriageEntity(id = msgId, message = message, priority = selectedPriority)
                                 repository.insertVictim(entity)
                                 // Bug 12 Fix: Also broadcast to connected mesh peers
-                                meshManager.broadcastMessage("[ID:$msgId][TTS]Triage Alert [$selectedPriority]: $message")
+                                meshManager.broadcastMessage("[ID:$msgId][PRIO:$selectedPriority][TTS]Triage Alert [$selectedPriority]: $message")
                             }
                             showDialog = false
                         }

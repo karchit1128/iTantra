@@ -17,8 +17,8 @@ class AudioEngine {
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         
         // VAD (Voice Activity Detection) Parameters
-        private const val SILENCE_THRESHOLD = 2000 // Amplitude below this is considered silence
-        private const val VAD_PAUSE_MS = 500L // Trigger STT after 1 second of silence
+        private const val SILENCE_THRESHOLD = 3500 // BUG-4 Fix: was 2000, too sensitive to ambient noise
+        private const val VAD_PAUSE_MS = 1200L // BUG-4 Fix: was 500ms, too short — sentence ends mid-word
         
         // Goldfish Memory Buffer (Prevents Out-Of-Memory exceptions)
         private const val MAX_SECONDS = 30 // Up to 30s per PTT message0 // Up to 30s per PTT message
@@ -97,6 +97,7 @@ class AudioEngine {
 
     private fun captureLoop(bufferSize: Int) {
         val audioData = ShortArray(bufferSize)
+        val loopStartTime = System.currentTimeMillis()
         while (isRecording.get()) {
             val bytesRead = audioRecord?.read(audioData, 0, audioData.size) ?: 0
             if (bytesRead > 0) {
@@ -117,15 +118,24 @@ class AudioEngine {
                             break
                         }
                     }
+                } else {
+                    // BUG-15 Fix: Hard cap at 15s when VAD is disabled (PTT mode)
+                    if (now - loopStartTime > 15000) {
+                        Log.w(TAG, "PTT max duration reached (15s). Auto-stopping.")
+                        stopRecording(null)
+                        break
+                    }
                 }
                 
-                // Write into Goldfish Circular Buffer
-                for (i in 0 until bytesRead) {
-                    audioBuffer[bufferHead] = audioData[i]
-                    bufferHead++
-                    if (bufferHead >= MAX_SAMPLES) {
-                        bufferHead = 0
-                        isBufferFull = true
+                // BUG-20 Fix: Synchronize buffer writes
+                synchronized(audioBuffer) {
+                    for (i in 0 until bytesRead) {
+                        audioBuffer[bufferHead] = audioData[i]
+                        bufferHead++
+                        if (bufferHead >= MAX_SAMPLES) {
+                            bufferHead = 0
+                            isBufferFull = true
+                        }
                     }
                 }
             }
@@ -149,26 +159,26 @@ class AudioEngine {
             audioRecord = null
             recordingThread = null
             
-            // Extract the Goldfish Memory buffer linearly
-            val resultSize = if (isBufferFull) MAX_SAMPLES else bufferHead
-            val finalAudio = ShortArray(resultSize)
-            
-            if (isBufferFull) {
-                // Copy from head to end, then 0 to head
-                System.arraycopy(audioBuffer, bufferHead, finalAudio, 0, MAX_SAMPLES - bufferHead)
-                System.arraycopy(audioBuffer, 0, finalAudio, MAX_SAMPLES - bufferHead, bufferHead)
-            } else {
-                System.arraycopy(audioBuffer, 0, finalAudio, 0, bufferHead)
+            // BUG-20 Fix: Synchronize extraction
+            val finalAudio: ShortArray
+            synchronized(audioBuffer) {
+                val resultSize = if (isBufferFull) MAX_SAMPLES else bufferHead
+                finalAudio = ShortArray(resultSize)
+                
+                if (isBufferFull) {
+                    // Copy from head to end, then 0 to head
+                    System.arraycopy(audioBuffer, bufferHead, finalAudio, 0, MAX_SAMPLES - bufferHead)
+                    System.arraycopy(audioBuffer, 0, finalAudio, MAX_SAMPLES - bufferHead, bufferHead)
+                } else {
+                    System.arraycopy(audioBuffer, 0, finalAudio, 0, bufferHead)
+                }
             }
             
             Log.d(TAG, "Audio extracted from Goldfish buffer. Length: ${finalAudio.size} samples")
             
-            // Trigger callbacks
             val targetCallback = manualCallbackOverride ?: onCompleteCallback
             
-            if (finalAudio.isNotEmpty()) {
-                targetCallback?.invoke(finalAudio)
-            }
+            targetCallback?.invoke(finalAudio)
             
             onCompleteCallback = null // clear reference
         }
