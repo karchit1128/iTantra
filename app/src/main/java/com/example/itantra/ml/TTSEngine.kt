@@ -17,7 +17,7 @@ import java.util.concurrent.Executors
 
 object TTSEngine {
     private const val TAG = "TTSEngine"
-    private var tts: OfflineTts? = null
+    private val ttsCache = mutableMapOf<String, OfflineTts>()
     var currentLang: String = ""
     var loadedLang: String = ""
         
@@ -30,17 +30,7 @@ object TTSEngine {
     const val USE_SHARED_ESPEAK = true
 
     private suspend fun safeReleaseTts() {
-        if (tts != null) {
-            try {
-                // TASK 1 Fix: Ensure native C++ background generation/teardown threads finish before destroying the mutex
-                kotlinx.coroutines.delay(300)
-                tts?.release()
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "Native TTS release race condition caught (mutex destroyed)", e)
-            } finally {
-                tts = null
-            }
-        }
+        // Obsolete: caching architecture avoids runtime release
     }
 
 
@@ -48,9 +38,10 @@ object TTSEngine {
         initLocked(context, language)
     }
 
-    private suspend fun initLocked(context: Context, language: String = "English") {
-        if (tts != null && loadedLang == language) {
+        private suspend fun initLocked(context: Context, language: String = "English") {
+        if (ttsCache.containsKey(language)) {
             currentLang = language
+            loadedLang = language
             return
         }
         
@@ -125,7 +116,8 @@ object TTSEngine {
                 ruleFsts = "",
                 maxNumSentences = 1
             )
-            tts = OfflineTts(assetManager = context.assets, config = config)
+            val newTts = OfflineTts(assetManager = context.assets, config = config)
+            ttsCache[language] = newTts
             currentLang = language
             loadedLang = language
             Log.d(TAG, "Sherpa-ONNX TTS initialized for $language.")
@@ -175,15 +167,16 @@ object TTSEngine {
         } else currentLang
 
         // BUG-5 Fix: Only re-init if tts not loaded or language changed
-        if (context != null && (tts == null || loadedLang != effectiveLang)) {
+        if (context != null && !ttsCache.containsKey(effectiveLang)) {
             initLocked(context, effectiveLang)
         }
-        if (tts == null) return@withContext
+        val currentTts = ttsCache[effectiveLang]
+        if (currentTts == null) return@withContext
 
         
         Log.d(TAG, "Sherpa TTS generating: $text")
         try {
-            val audio = tts!!.generate(text)
+            val audio = currentTts.generate(text)
             if (audio.samples.isEmpty()) return@withContext
             val peak = audio.samples.maxOfOrNull { kotlin.math.abs(it) } ?: 1.0f
             val scale = if (peak > 1.0f) 1.0f / peak else 1.0f
@@ -267,14 +260,16 @@ object TTSEngine {
         if (currentLang in sttOnlyLangs) return@withContext Pair(0L, 0f)
 
         val isAlert = false
-        if (tts == null) {
-            if (context != null) initLocked(context, if (currentLang.isEmpty()) "English" else currentLang)
-            if (tts == null) return@withContext Pair(0L, 0f)
+        if (!ttsCache.containsKey(currentLang) && context != null) {
+            initLocked(context, if (currentLang.isEmpty()) "English" else currentLang)
         }
+        val currentTts = ttsCache[currentLang]
+        if (currentTts == null) return@withContext Pair(0L, 0f)
+
         Log.d(TAG, "Sherpa TTS Benchmarking: $text")
         try {
             val startTime = System.currentTimeMillis()
-            val audio = tts!!.generate(text)
+            val audio = currentTts.generate(text)
             val endTime = System.currentTimeMillis()
             
             if (audio.samples.isEmpty()) return@withContext Pair(0L, 0f)
@@ -352,7 +347,10 @@ object TTSEngine {
     }
 
     suspend fun shutdown() = withContext(ttsDispatcher) {
-        safeReleaseTts()
+        ttsCache.values.forEach { 
+            try { kotlinx.coroutines.delay(100); it.release() } catch(e: Exception){} 
+        }
+        ttsCache.clear()
         currentLang = ""
         Log.d(TAG, "Sherpa TTS shutdown completely.")
     }
