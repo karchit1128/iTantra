@@ -6,7 +6,7 @@ plugins {
 }
 
 base {
-    archivesName.set("TalkBit")
+    archivesName.set("TalkBit-v1.0.0")
 }
 
 android {
@@ -89,3 +89,4 @@ tasks.register<Exec>("validateAssets") {
 tasks.named("preBuild") {
     dependsOn("validateAssets")
 }
+
