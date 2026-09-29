@@ -96,8 +96,12 @@ fun WalkieTalkieScreen(onNavigateToSettings: () -> Unit = {}) {
             if (key == "target_language") {
                 val newLang = prefs.getString("target_language", "English") ?: "English"
                 selectedLanguage = newLang
-                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    com.example.itantra.ml.TTSEngine.init(context, newLang)
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        com.example.itantra.ml.TTSEngine.init(context, newLang)
+                    } catch (e: Exception) {
+                        android.util.Log.e("WalkieTalkieScreen", "Language switch init failed", e)
+                    }
                 }
             }
         }
@@ -428,7 +432,7 @@ fun WalkieTalkieScreen(onNavigateToSettings: () -> Unit = {}) {
                             .background(if (sendEnabled) NdrfOrange else LightBorder)
                             .clickable(enabled = sendEnabled) {
                                 val msg = textInput; textInput = ""
-                                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     try {
                                         val loc = com.example.itantra.hardware.LocationEngine.fetchLocation(context)
                                         val msgId = java.util.UUID.randomUUID().toString()
