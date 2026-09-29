@@ -29,11 +29,26 @@ object TTSEngine {
 
     const val USE_SHARED_ESPEAK = true
 
+    private suspend fun safeReleaseTts() {
+        if (tts != null) {
+            try {
+                // TASK 1 Fix: Ensure native C++ background generation/teardown threads finish before destroying the mutex
+                kotlinx.coroutines.delay(300)
+                tts?.release()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Native TTS release race condition caught (mutex destroyed)", e)
+            } finally {
+                tts = null
+            }
+        }
+    }
+
+
     suspend fun init(context: Context, language: String = "English") = withContext(ttsDispatcher) {
         initLocked(context, language)
     }
 
-    private fun initLocked(context: Context, language: String = "English") {
+    private suspend fun initLocked(context: Context, language: String = "English") {
         if (tts != null && loadedLang == language) {
             currentLang = language
             return
@@ -41,16 +56,14 @@ object TTSEngine {
         
         val sttOnlyLangs = listOf("Bengali", "Tamil", "Gujarati", "Kannada", "Odia")
         if (language in sttOnlyLangs) {
-            tts?.release()
-            tts = null
+            safeReleaseTts()
             currentLang = language
             Log.d(TAG, "Skipping neural TTS initialization for $language (STT-only mode)")
             return
         }
 
         if (!AssetValidator.preflightTts(context, language)) {
-            tts?.release()
-            tts = null
+            safeReleaseTts()
             currentLang = language
             Log.e(TAG, "Preflight failed for $language. Skipping native init.")
             return
@@ -59,8 +72,7 @@ object TTSEngine {
         Log.d(TAG, "Sherpa-ONNX TTS initializing for $language...")
 
         try {
-            tts?.release()
-            tts = null
+            safeReleaseTts()
             
             val (modelDir, onnxFile) = when (language) {
                 "Hindi" -> Pair("vits-piper-hi_IN-rohan-medium", "hi_IN-rohan-medium.onnx")
@@ -340,8 +352,7 @@ object TTSEngine {
     }
 
     suspend fun shutdown() = withContext(ttsDispatcher) {
-        tts?.release()
-        tts = null
+        safeReleaseTts()
         currentLang = ""
         Log.d(TAG, "Sherpa TTS shutdown completely.")
     }
